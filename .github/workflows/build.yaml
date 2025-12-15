@@ -1,0 +1,148 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - '*'
+    tags:
+      - '*'
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: shell-ai
+  TARGETS: >-
+    x86_64-unknown-linux-musl
+    aarch64-unknown-linux-musl
+    x86_64-apple-darwin
+    aarch64-apple-darwin
+    x86_64-pc-windows-gnu
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build all targets
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/rust-cross/cargo-zigbuild:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            /usr/local/cargo/registry/index
+            /usr/local/cargo/registry/cache
+            /usr/local/cargo/git/db
+          key: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-
+
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: cargo-build-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            cargo-build-${{ hashFiles('**/Cargo.lock') }}-
+            cargo-build-
+
+      - name: Add Rust targets
+        run: rustup target add $TARGETS
+
+      - name: Create dlltool shim for Windows cross-compilation
+        run: |
+          # Workaround for https://github.com/rust-cross/cargo-zigbuild/issues/343
+          echo '#!/bin/sh' > /usr/local/bin/x86_64-w64-mingw32-dlltool
+          echo 'exec zig dlltool "$@"' >> /usr/local/bin/x86_64-w64-mingw32-dlltool
+          chmod +x /usr/local/bin/x86_64-w64-mingw32-dlltool
+
+      - name: Build all targets
+        run: |
+          # shellcheck disable=SC2086
+          cargo zigbuild --release $(printf -- '--target %s ' $TARGETS)
+
+      - name: Build xtask
+        run: cargo build --release -p xtask
+
+      - name: Prepare artifacts
+        run: |
+          # shellcheck disable=SC2086
+          ./target/release/xtask package $TARGETS
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: binaries
+          path: artifacts/*
+
+  release:
+    name: Create Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: binaries
+          path: release-assets
+
+      - name: Generate checksums
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Extract release notes from CHANGELOG.md
+        id: extract_release_notes
+        uses: actions/github-script@v8
+        with:
+          result-encoding: string
+          script: |
+            const fs = require('fs');
+            const tag = context.ref.replace('refs/tags/', '');
+            const tagPattern = '^##\\s*' + tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*';
+
+            const versionPattern = new RegExp(tagPattern);
+
+            const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
+
+            const lines = changelog.split('\n');
+
+            let inSection = false;
+            let releaseTitle = '';
+            let releaseBodyLines = [];
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i];
+              if (versionPattern.test(line)) {
+                releaseTitle = line.replace(/^##\s+/, '').trim();
+                inSection = true;
+                continue;
+              }
+              if (inSection) {
+                if (/^##\s+/.test(line)) {
+                  break;
+                } else {
+                  releaseBodyLines.push(line);
+                }
+              }
+            }
+            const releaseBody = releaseBodyLines.join('\n').trim();
+
+            core.setOutput('release_title', releaseTitle);
+            core.setOutput('release_body', releaseBody);
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.extract_release_notes.outputs.release_title }}
+          body: ${{ steps.extract_release_notes.outputs.release_body }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: release-assets/*

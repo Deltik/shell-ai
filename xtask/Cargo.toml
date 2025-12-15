@@ -1,0 +1,10 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "6", default-features = false, features = ["deflate"] }
