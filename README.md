@@ -347,11 +347,12 @@ _shai_transform() {
         local colors=(196 202 208 214 220 226 190 154 118 082 046 047 049 051 045 039 033 027 021 057 093 129 165 201 199 198 197)
         local highlighted="" i=0
         for ((j=1; j<=${#original}; j++)); do
-            highlighted+="%F{${colors[i++ % ${#colors[@]}]}}${original[j]}"
+            highlighted+="\033[38;5;${colors[i++ % ${#colors[@]} + 1]}m${original[j]}"
         done
-        BUFFER="${highlighted}%f 💭"
-        zle -I && zle redisplay
+        printf '\r\033[K%b\033[0m 💭' "$highlighted"
         BUFFER=$(shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null | head -1)
+        printf '\r\033[K'
+        zle reset-prompt
         zle end-of-line
     fi
 }
