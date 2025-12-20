@@ -84,7 +84,7 @@ async fn dialog_frontend(validated: &ValidatedConfig<'_>, initial_prompt: &str, 
     'outer: loop {
         // Show progress while generating suggestions
         let progress = Progress::new("Generating suggestions...");
-        let suggestions = generate_suggestions(validated, &prompt, ctx_enabled, &ctx_buffer).await;
+        let suggestions = generate_suggestions(validated, &prompt, ctx_enabled, &ctx_buffer, None).await;
         if let Some(ref p) = progress {
             p.finish_and_clear();
         }
@@ -206,7 +206,7 @@ async fn readline_frontend(validated: &ValidatedConfig<'_>, initial_prompt: &str
     'outer: loop {
         // Show progress while generating suggestions
         let progress = Progress::new("Generating suggestions...");
-        let suggestions = generate_suggestions(validated, &prompt, ctx_enabled, &ctx_buffer).await;
+        let suggestions = generate_suggestions(validated, &prompt, ctx_enabled, &ctx_buffer, None).await;
         if let Some(ref p) = progress {
             p.finish_and_clear();
         }
@@ -322,8 +322,14 @@ async fn readline_frontend(validated: &ValidatedConfig<'_>, initial_prompt: &str
 /// Noninteractive frontend: auto-select first suggestion and output.
 async fn noninteractive_frontend(validated: &ValidatedConfig<'_>, prompt: &str) -> Result<()> {
     let config = validated.app_config();
+    // Optimization: Only generate 1 suggestion for human output since we only use the first.
+    // JSON output may want all suggestions for programmatic selection.
+    let count_override = match config.output_format.value {
+        OutputFormat::Human => Some(1),
+        OutputFormat::Json => None,
+    };
     let progress = Progress::new("Generating suggestions...");
-    let suggestions = generate_suggestions(validated, prompt, false, "").await;
+    let suggestions = generate_suggestions(validated, prompt, false, "", count_override).await;
     if let Some(ref p) = progress {
         p.finish_and_clear();
     }
@@ -348,9 +354,10 @@ async fn generate_suggestions(
     prompt: &str,
     ctx_enabled: bool,
     ctx_buffer: &str,
+    count_override: Option<usize>,
 ) -> Result<Vec<Suggestion>> {
     let config = validated.app_config();
-    let count = config.suggestion_count.value.max(1) as usize;
+    let count = count_override.unwrap_or_else(|| config.suggestion_count.value.max(1) as usize);
     let max_workers = 4usize;
 
     let prompt_string = prompt.to_string();
