@@ -1,10 +1,10 @@
 # Shell-AI
 
-[![GitHub releases](https://img.shields.io/github/v/release/Deltik/shell-ai)](https://github.com/Deltik/shell-ai/releases)
-[![Crates.io](https://img.shields.io/crates/v/shell-ai)](https://crates.io/crates/shell-ai)
-[![GitHub downloads](https://img.shields.io/github/downloads/Deltik/shell-ai/total)](https://github.com/Deltik/shell-ai/releases)
-[![Crates.io downloads](https://img.shields.io/crates/dr/shell-ai)](https://crates.io/crates/shell-ai)
-[![Build status](https://img.shields.io/github/actions/workflow/status/Deltik/shell-ai/build.yaml)](https://github.com/Deltik/shell-ai/actions/workflows/build.yaml)
+[![GitHub release](https://img.shields.io/github/v/release/Deltik/shell-ai?logo=github&label=GitHub)](https://github.com/Deltik/shell-ai/releases)
+[![Crates.io](https://img.shields.io/crates/v/shell-ai?logo=rust&label=crates.io)](https://crates.io/crates/shell-ai)
+[![GitHub downloads](https://img.shields.io/github/downloads/Deltik/shell-ai/total?logo=github&label=downloads)](https://github.com/Deltik/shell-ai/releases)
+[![Crates.io downloads](https://img.shields.io/crates/d/shell-ai?logo=rust&label=downloads)](https://crates.io/crates/shell-ai)
+[![Build status](https://img.shields.io/github/actions/workflow/status/Deltik/shell-ai/build.yaml?logo=github&label=build)](https://github.com/Deltik/shell-ai/actions/workflows/build.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/Deltik)
 
