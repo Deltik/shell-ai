@@ -316,14 +316,45 @@ alias 'explain'='shell-ai explain --'
 _shai_transform() {
     if [[ -n "$READLINE_LINE" ]]; then
         local original="$READLINE_LINE"
-        local colors=(196 202 208 214 220 226 190 154 118 082 046 047 049 051 045 039 033 027 021 057 093 129 165 201 199 198 197)
-        local highlighted="" i=0
-        for ((j=0; j<${#original}; j++)); do
-            highlighted+="\033[38;5;${colors[i++ % ${#colors[@]}]}m${original:j:1}"
+        local len=${#original}
+        local tmpfile=$(mktemp)
+        local had_monitor=0
+        local pid
+        local spinner=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+        [[ $- == *m* ]] && had_monitor=1
+
+        set +m
+        trap 'kill $pid 2>/dev/null; (( had_monitor )) && set -m; rm -f "$tmpfile"; printf "\r\033[K"; trap - INT TERM; return' INT TERM
+
+        { shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null | head -1 > "$tmpfile" & } 2>/dev/null
+        pid=$!
+
+        local pos=0
+        while kill -0 $pid 2>/dev/null; do
+            local highlighted=""
+            for ((j=0; j<len; j++)); do
+                local dist=$(( j - pos ))
+                (( dist < 0 )) && dist=$(( -dist ))
+                local wrap_dist=$(( len - dist ))
+                (( pos > 2 && wrap_dist < dist )) && dist=$wrap_dist
+                if (( dist == 0 )); then
+                    highlighted+="\033[1;96m${original:j:1}"
+                elif (( dist <= 2 )); then
+                    highlighted+="\033[0;36m${original:j:1}"
+                else
+                    highlighted+="\033[2;36m${original:j:1}"
+                fi
+            done
+            printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' "${spinner[pos % ${#spinner[@]}]}" "$highlighted"
+            sleep 0.08
+            pos=$(( (pos + 1) % len ))
         done
-        printf '\r\033[K%b\033[0m 💭' "$highlighted"
-        READLINE_LINE=$(shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null | head -1)
+
+        trap - INT TERM
+        (( had_monitor )) && set -m
+        READLINE_LINE=$(< "$tmpfile")
         READLINE_POINT=${#READLINE_LINE}
+        rm -f "$tmpfile"
         printf '\r\033[K'
     fi
 }
@@ -336,21 +367,48 @@ bind -x '"\C-g": _shai_transform'
 <summary>Zsh (~/.zshrc)</summary>
 
 ```zsh
-# Aliases
+: Aliases
 alias '??'='shell-ai suggest --'
 alias 'explain'='shell-ai explain --'
 
-# Ctrl+G: Transform current line into a shell command
+: Ctrl+G: Transform current line into a shell command
 _shai_transform() {
     if [[ -n "$BUFFER" ]]; then
         local original="$BUFFER"
-        local colors=(196 202 208 214 220 226 190 154 118 082 046 047 049 051 045 039 033 027 021 057 093 129 165 201 199 198 197)
-        local highlighted="" i=0
-        for ((j=1; j<=${#original}; j++)); do
-            highlighted+="\033[38;5;${colors[i++ % ${#colors[@]} + 1]}m${original[j]}"
+        local len=${#original}
+        local tmpfile=$(mktemp)
+        local spinner=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+        local pid
+
+        setopt LOCAL_OPTIONS NO_NOTIFY NO_MONITOR LOCAL_TRAPS
+        trap 'kill $pid 2>/dev/null; rm -f "$tmpfile"; printf "\r\033[K"; zle reset-prompt; return' INT TERM
+
+        (shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null | head -1 > "$tmpfile") &!
+        pid=$!
+
+        local pos=0
+        while kill -0 $pid 2>/dev/null; do
+            local highlighted=""
+            for ((j=1; j<=len; j++)); do
+                local dist=$(( j - 1 - pos ))
+                (( dist < 0 )) && dist=$(( -dist ))
+                local wrap_dist=$(( len - dist ))
+                (( pos > 2 && wrap_dist < dist )) && dist=$wrap_dist
+                if (( dist == 0 )); then
+                    highlighted+="\033[1;96m${original[j]}"
+                elif (( dist <= 2 )); then
+                    highlighted+="\033[0;36m${original[j]}"
+                else
+                    highlighted+="\033[2;36m${original[j]}"
+                fi
+            done
+            printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' "${spinner[pos % ${#spinner[@]} + 1]}" "$highlighted"
+            sleep 0.08
+            pos=$(( (pos + 1) % len ))
         done
-        printf '\r\033[K%b\033[0m 💭' "$highlighted"
-        BUFFER=$(shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null | head -1)
+
+        BUFFER=$(< "$tmpfile")
+        rm -f "$tmpfile"
         printf '\r\033[K'
         zle reset-prompt
         zle end-of-line
@@ -373,19 +431,54 @@ abbr -a 'explain' 'shell-ai explain --'
 # Ctrl+G: Transform current line into a shell command
 function _shai_transform
     set -l cmd (commandline)
-    if test -n "$cmd"
-        set -l colors 196 202 208 214 220 226 190 154 118 82 46 47 49 51 45 39 33 27 21 57 93 129 165 201 199 198 197
-        set -l highlighted ""
-        for i in (seq (string length "$cmd"))
-            set -l color_idx (math "($i - 1) % "(count $colors)" + 1")
-            set highlighted "$highlighted"\e"[38;5;"$colors[$color_idx]"m"(string sub -s $i -l 1 "$cmd")
-        end
-        printf '\r\033[K%b\033[0m 💭' "$highlighted"
-        commandline -r (shell-ai --frontend=noninteractive suggest -- "$cmd" 2>/dev/null | head -1)
-        printf '\r\033[K'
-        commandline -f repaint
-        commandline -f end-of-line
+    test -z "$cmd"; and return
+
+    set -g __shai_cmd $cmd
+    set -g __shai_tmp (mktemp)
+    set -g __shai_pid
+    set -g __shai_cancelled 0
+    set -l spinner ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏
+    set -l len (string length "$cmd")
+
+    function __shai_cancel --on-event fish_cancel --on-signal INT
+        set -g __shai_cancelled 1
+        kill $__shai_pid 2>/dev/null
     end
+
+    sh -c 'shell-ai --frontend=noninteractive suggest -- "$1" 2>/dev/null | head -1 > "$2"' _ "$cmd" "$__shai_tmp" &
+    set __shai_pid $last_pid
+
+    set -l pos 0
+    while kill -0 $__shai_pid 2>/dev/null; and test $__shai_cancelled -eq 0
+        set -l highlighted ""
+        for j in (seq $len)
+            set -l dist (math "abs($j - 1 - $pos)")
+            set -l wrap_dist (math "$len - $dist")
+            test $pos -gt 2 -a $wrap_dist -lt $dist; and set dist $wrap_dist
+            if test $dist -eq 0
+                set highlighted "$highlighted"\e"[1;96m"(string sub -s $j -l 1 "$cmd")
+            else if test $dist -le 2
+                set highlighted "$highlighted"\e"[0;36m"(string sub -s $j -l 1 "$cmd")
+            else
+                set highlighted "$highlighted"\e"[2;36m"(string sub -s $j -l 1 "$cmd")
+            end
+        end
+        printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' $spinner[(math "$pos % 10 + 1")] "$highlighted"
+        sleep 0.08 &; wait $last_pid; or break
+        set pos (math "($pos + 1) % $len")
+    end
+
+    functions -e __shai_cancel
+    printf '\r\033[K'
+    if test $__shai_cancelled -eq 1
+        commandline -r $__shai_cmd
+    else
+        commandline -r (cat $__shai_tmp)
+    end
+    rm -f $__shai_tmp
+    set -e __shai_pid __shai_tmp __shai_cmd __shai_cancelled
+    commandline -f repaint
+    commandline -f end-of-line
 end
 bind \cg _shai_transform
 ```
@@ -405,16 +498,55 @@ Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
     $line = $null
     [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$null)
     if ($line) {
-        $colors = @(196, 202, 208, 214, 220, 226, 190, 154, 118, 82, 46, 47, 49, 51, 45, 39, 33, 27, 21, 57, 93, 129, 165, 201, 199, 198, 197)
-        $highlighted = ""
-        for ($i = 0; $i -lt $line.Length; $i++) {
-            $highlighted += "`e[38;5;$($colors[$i % $colors.Length])m$($line[$i])"
+        $len = $line.Length
+        $spinner = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
+        $cancelled = $false
+
+        $job = Start-Job -ScriptBlock {
+            param($l)
+            shell-ai --frontend=noninteractive suggest -- $l 2>$null | Select-Object -First 1
+        } -ArgumentList $line
+
+        $pos = 0
+        while ($job.State -eq 'Running') {
+            if ([Console]::KeyAvailable) {
+                $key = [Console]::ReadKey($true)
+                if ($key.Key -eq 'C' -and $key.Modifiers -eq 'Control') {
+                    $cancelled = $true
+                    break
+                }
+            }
+            $highlighted = ""
+            for ($j = 0; $j -lt $len; $j++) {
+                $dist = [Math]::Abs($j - $pos)
+                $wrapDist = $len - $dist
+                if ($pos -gt 2 -and $wrapDist -lt $dist) { $dist = $wrapDist }
+                if ($dist -eq 0) {
+                    $highlighted += "`e[1;96m$($line[$j])"
+                } elseif ($dist -le 2) {
+                    $highlighted += "`e[0;36m$($line[$j])"
+                } else {
+                    $highlighted += "`e[2;36m$($line[$j])"
+                }
+            }
+            $spin = $spinner[$pos % $spinner.Length]
+            [Console]::Write("`r`e[K`e[1;36m$spin`e[0m $highlighted`e[0m")
+            Start-Sleep -Milliseconds 80
+            $pos = ($pos + 1) % $len
         }
-        [Console]::Write("`r`e[K$highlighted`e[0m 💭")
-        $result = shell-ai --frontend=noninteractive suggest -- $line 2>$null | Select-Object -First 1
-        [Console]::Write("`r`e[K")
-        [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, $result)
-        [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+
+        if ($cancelled) {
+            Stop-Job $job
+            Remove-Job $job
+            [Console]::Write("`r`e[K")
+            [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+        } else {
+            $result = Receive-Job $job
+            Remove-Job $job
+            [Console]::Write("`r`e[K")
+            [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, $result)
+            [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+        }
     }
 }
 ```
