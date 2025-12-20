@@ -368,20 +368,22 @@ bindkey '^G' _shai_transform
 ```fish
 # Abbreviations
 abbr -a '??' 'shell-ai suggest --'
-abbr -a 'explain' 'shell-ai explain'
+abbr -a 'explain' 'shell-ai explain --'
 
 # Ctrl+G: Transform current line into a shell command
 function _shai_transform
     set -l cmd (commandline)
     if test -n "$cmd"
-        set -l colors 196 202 208 214 220 226 190 154 118 082 046 047 049 051 045 039 033 027 021 057 093 129 165 201 199 198 197
+        set -l colors 196 202 208 214 220 226 190 154 118 82 46 47 49 51 45 39 33 27 21 57 93 129 165 201 199 198 197
         set -l highlighted ""
         for i in (seq (string length "$cmd"))
             set -l color_idx (math "($i - 1) % "(count $colors)" + 1")
-            set highlighted "$highlighted"(set_color (printf "%.3d" $colors[$color_idx]))(string sub -s $i -l 1 "$cmd")
+            set highlighted "$highlighted"\e"[38;5;"$colors[$color_idx]"m"(string sub -s $i -l 1 "$cmd")
         end
-        commandline -r "$highlighted"(set_color normal)" 💭"
+        printf '\r\033[K%b\033[0m 💭' "$highlighted"
         commandline -r (shell-ai --frontend=noninteractive suggest -- "$cmd" 2>/dev/null | head -1)
+        printf '\r\033[K'
+        commandline -f repaint
         commandline -f end-of-line
     end
 end
