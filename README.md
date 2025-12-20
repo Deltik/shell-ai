@@ -414,6 +414,7 @@ Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
         $result = shell-ai --frontend=noninteractive suggest -- $line 2>$null | Select-Object -First 1
         [Console]::Write("`r`e[K")
         [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, $result)
+        [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
     }
 }
 ```
