@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::Path;
 
@@ -11,7 +11,7 @@ mod provider;
 mod suggest;
 mod ui;
 
-use crate::config::{AppConfig, CliOverrides, DebugLevel, Frontend, OutputFormat};
+use crate::config::{AppConfig, CliOverrides, DebugLevel, OutputFormat};
 
 /// Global options available on all commands.
 #[derive(Parser, Debug, Clone, Default)]
@@ -32,7 +32,7 @@ pub struct GlobalOptions {
     #[arg(long = "temperature", global = true)]
     pub temperature: Option<f32>,
 
-    /// Frontend mode: dialog (interactive menu with arrow keys), readline (text-based selection), noninteractive (scripting)
+    /// Frontend mode: automatic (default), dialog, readline, or noninteractive
     #[arg(long = "frontend", global = true)]
     pub frontend: Option<String>,
 
@@ -163,17 +163,6 @@ fn global_to_cli_overrides(global: &GlobalOptions) -> CliOverrides {
     }
 }
 
-/// Validate that frontend and ctx options don't conflict.
-fn validate_options(config: &AppConfig, ctx: bool) -> Result<()> {
-    if config.frontend.value == Frontend::Noninteractive && ctx {
-        bail!(
-            "Conflict: --frontend=noninteractive cannot be used with --ctx.\n\
-             Context mode requires interactive prompting for follow-up commands."
-        );
-    }
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     logger::init();
@@ -198,7 +187,6 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Command::Suggest(args) => {
-            validate_options(&config, args.ctx)?;
             let validated_config = config.validate()?;
 
             let opts = suggest::SuggestOptions {

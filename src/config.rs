@@ -80,9 +80,14 @@ impl<T> ConfigValue<T> {
 #[strum(serialize_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum Frontend {
+    /// Automatic frontend selection based on context (TTY, output format).
     #[default]
+    Automatic,
+    /// Interactive dialog with arrow-key navigation.
     Dialog,
+    /// Text-based readline interface.
     Readline,
+    /// Non-interactive mode for scripting/automation.
     Noninteractive,
 }
 
@@ -422,8 +427,8 @@ pub const GLOBAL_SETTINGS_METADATA: &[FieldMeta] = &[
         name: "frontend",
         env_var: Some(env::SHAI_FRONTEND),
         env_aliases: &[],
-        description: "UI mode: dialog, readline, or noninteractive",
-        default: Some("dialog"),
+        description: "UI mode: automatic (default), dialog, readline, or noninteractive",
+        default: Some("automatic"),
         required: false,
         section: Section::Ui,
         deprecated: false,
@@ -1124,7 +1129,7 @@ impl AppConfig {
                 sources.get("temperature").copied().unwrap_or(ConfigSource::Default),
             ),
             frontend: ConfigValue::new(
-                parsed.frontend.unwrap_or(Frontend::Dialog),
+                parsed.frontend.unwrap_or(Frontend::Automatic),
                 sources.get("frontend").copied().unwrap_or(ConfigSource::Default),
             ),
             output_format: ConfigValue::new(
@@ -1267,6 +1272,22 @@ impl AppConfig {
                             env::SHAI_SKIP_CONFIRM, env::SHAI_FRONTEND
                         );
                     }
+                }
+            }
+        }
+
+        // Check for frontend + output_format mutual exclusion
+        // JSON output requires a non-interactive frontend (or automatic, which will resolve appropriately)
+        if self.output_format.value == OutputFormat::Json {
+            match self.frontend.value {
+                Frontend::Automatic | Frontend::Noninteractive => {}
+                Frontend::Dialog | Frontend::Readline => {
+                    anyhow::bail!(
+                        "Configuration conflict: frontend={} cannot be used with output_format=json.\n\
+                         JSON output requires a non-interactive frontend.\n\
+                         Hint: Use frontend=noninteractive or frontend=automatic (default).",
+                        self.frontend.value
+                    );
                 }
             }
         }

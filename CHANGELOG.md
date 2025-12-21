@@ -9,7 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.5.1 (UNRELEASED)
 
+### Added
+
+- **New `automatic` frontend mode (now the default)**
+
+  The `frontend` setting now defaults to `automatic`, which intelligently selects the appropriate frontend based on context:
+  - TTY + human output → `dialog` (interactive menu)
+  - Non-TTY + human output → `noninteractive` (prints first suggestion)
+  - JSON output → `noninteractive` (prints all suggestions as JSON)
+
+  This makes `--output-format=json` work seamlessly without needing to explicitly set `--frontend=noninteractive`.
+
 ### Changed
+
+- **Mutual exclusion validation for `frontend` and `output_format`**
+
+  JSON output (`--output-format=json`) now requires a compatible frontend. Combining JSON output with an explicitly-set interactive frontend (`dialog` or `readline`) is now a configuration error with a helpful message. Use `frontend=automatic` (default) or `frontend=noninteractive` with JSON output.
 
 - **Optimized API calls in noninteractive human output mode**
 

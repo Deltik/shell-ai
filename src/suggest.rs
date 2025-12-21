@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
@@ -6,7 +6,7 @@ use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::config::{Frontend, OutputFormat, ValidatedConfig};
+use crate::config::{AppConfig, Frontend, OutputFormat, ValidatedConfig};
 use crate::explain;
 use crate::http;
 use crate::progress::Progress;
@@ -49,6 +49,27 @@ pub struct SuggestOptions {
     pub prompt: Vec<String>,
 }
 
+/// Resolve `Frontend::Automatic` to a concrete frontend based on runtime context.
+///
+/// Resolution rules:
+/// - JSON output → Noninteractive (JSON requires structured output)
+/// - TTY + Human output → Dialog (interactive menu)
+/// - Non-TTY + Human output → Noninteractive (print first suggestion)
+fn resolve_frontend(config: &AppConfig) -> Frontend {
+    match config.frontend.value {
+        Frontend::Automatic => {
+            if config.output_format.value == OutputFormat::Json {
+                Frontend::Noninteractive
+            } else if std::io::stdout().is_terminal() {
+                Frontend::Dialog
+            } else {
+                Frontend::Noninteractive
+            }
+        }
+        other => other,
+    }
+}
+
 pub async fn run_suggest(validated: &ValidatedConfig<'_>, opts: SuggestOptions) -> Result<()> {
     let prompt = opts.prompt.join(" ");
     if prompt.trim().is_empty() {
@@ -59,9 +80,30 @@ pub async fn run_suggest(validated: &ValidatedConfig<'_>, opts: SuggestOptions) 
     // Context mode flag (CLI or env var)
     let ctx_enabled = opts.ctx || matches!(std::env::var("CTX"), Ok(v) if v.to_lowercase() == "true");
 
-    // Dispatch to appropriate frontend
+    // Resolve automatic frontend to concrete frontend based on context
     let config = validated.app_config();
-    match config.frontend.value {
+    let resolved_frontend = resolve_frontend(config);
+
+    log::debug!(
+        "Frontend resolution: {:?} -> {:?} (stdout_tty={}, output_format={:?})",
+        config.frontend.value,
+        resolved_frontend,
+        std::io::stdout().is_terminal(),
+        config.output_format.value
+    );
+
+    // Validate ctx compatibility with resolved frontend
+    if resolved_frontend == Frontend::Noninteractive && ctx_enabled {
+        return Err(anyhow!(
+            "Context mode (--ctx) requires an interactive frontend.\n\
+             The frontend resolved to noninteractive because stdout is not a TTY or JSON output was requested.\n\
+             Hint: Run in a terminal with human output format to use context mode."
+        ));
+    }
+
+    // Dispatch to appropriate frontend
+    match resolved_frontend {
+        Frontend::Automatic => unreachable!("Automatic should be resolved"),
         Frontend::Dialog => dialog_frontend(validated, &prompt, ctx_enabled).await,
         Frontend::Readline => readline_frontend(validated, &prompt, ctx_enabled).await,
         Frontend::Noninteractive => noninteractive_frontend(validated, &prompt).await,
