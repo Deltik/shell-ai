@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **New `shell-ai integration` subcommand for shell integration management**
+
+  Generate shell integration files with configurable features:
+  - `shell-ai integration generate <shell>` – Generate integration for bash, zsh, fish, or powershell
+  - `shell-ai integration update` – Regenerate all installed integrations (preserves preferences)
+  - `shell-ai integration list` – Show available features and installed integrations
+
+  **Presets** control which features are included:
+  - `minimal` – Tab completions only
+  - `standard` (default) – Completions + aliases (`??`, `explain`)
+  - `full` – Completions + aliases + Ctrl+G keybinding
+
+  **Customization** with `--add` and `--remove` modifiers:
+  ```bash
+  shell-ai integration generate zsh --preset standard --add keybinding
+  shell-ai integration generate fish --preset full --remove aliases
+  ```
+
+  Integration files are written to `~/.config/shell-ai/integration.<ext>` with embedded preferences for future updates.
+
 - **New `automatic` frontend mode (now the default)**
 
   The `frontend` setting now defaults to `automatic`, which intelligently selects the appropriate frontend based on context:

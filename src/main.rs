@@ -5,6 +5,7 @@ use std::path::Path;
 mod config;
 mod explain;
 mod http;
+mod integration;
 mod logger;
 mod progress;
 mod provider;
@@ -96,6 +97,9 @@ enum Command {
 
     /// Configuration management.
     Config(ConfigArgs),
+
+    /// Generate shell integration scripts (completions, aliases, keybindings).
+    Integration(integration::IntegrationArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -219,6 +223,9 @@ async fn main() -> Result<()> {
                     OutputFormat::Json => config.print_json(),
                 }
             }
+        }
+        Command::Integration(args) => {
+            integration::run(args, config.output_format.value)?;
         }
     }
 

@@ -64,6 +64,7 @@ ln -v -s shell-ai ~/.cargo/bin/shai
 ## Features
 
 - **Single binary**: No Python, no runtime dependencies. Just one executable.
+- **Shell integration**: Tab completions, aliases, and Ctrl+G keybinding via `shell-ai integration generate`.
 - **Multilingual**: Describe tasks in any language the AI model understands.
 - **Explain with citations**: `shell-ai explain` cites man pages, not just AI knowledge.
 - **Multiple providers**: OpenAI, Azure OpenAI, Groq, Ollama (local), and Mistral.
@@ -297,259 +298,147 @@ export MISTRAL_API_KEY=your-key  # REQUIRED
 
 ## Shell Integration
 
-Shell-AI works well standalone, but integrating it into your shell enables a streamlined workflow: type a description, press a key combination, and the command appears ready to execute.
+Shell-AI works well standalone, but integrating it into your shell enables any or all of these streamlined workflows:
 
-Each snippet below provides:
-- **`??`** alias for `shell-ai suggest --`
-- **`explain`** alias for `shell-ai explain --`
-- **Ctrl+G** keybinding to transform the current line into a shell command (with a progress indicator while Shell-AI is working)
+- **Tab completion** for shell-ai commands
+- **Aliases** as shorthands for shell-ai commands:
+  - **`??`** alias for `shell-ai suggest --`
+  - **`explain`** alias for `shell-ai explain --`
+- **Ctrl+G** keybinding to transform the current line into a shell command
 
-<details>
-<summary>Bash (~/.bashrc)</summary>
+### Setup
+
+Generate an integration file for your shell:
 
 ```bash
-# Aliases
-alias '??'='shell-ai suggest --'
-alias 'explain'='shell-ai explain --'
+# Generate with default features (completions + aliases)
+shell-ai integration generate bash
 
-# Ctrl+G: Transform current line into a shell command
-_shai_transform() {
-    if [[ -n "$READLINE_LINE" ]]; then
-        local original="$READLINE_LINE"
-        local len=${#original}
-        local tmpfile=$(mktemp)
-        local had_monitor=0
-        local pid
-        local spinner=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
-        [[ $- == *m* ]] && had_monitor=1
-
-        set +m
-        trap 'kill $pid 2>/dev/null; (( had_monitor )) && set -m; rm -f "$tmpfile"; printf "\r\033[K"; trap - INT TERM; return' INT TERM
-
-        { shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null | head -1 > "$tmpfile" & } 2>/dev/null
-        pid=$!
-
-        local pos=0
-        while kill -0 $pid 2>/dev/null; do
-            local highlighted=""
-            for ((j=0; j<len; j++)); do
-                local dist=$(( j - pos ))
-                (( dist < 0 )) && dist=$(( -dist ))
-                local wrap_dist=$(( len - dist ))
-                (( pos > 2 && wrap_dist < dist )) && dist=$wrap_dist
-                if (( dist == 0 )); then
-                    highlighted+="\033[1;96m${original:j:1}"
-                elif (( dist <= 2 )); then
-                    highlighted+="\033[0;36m${original:j:1}"
-                else
-                    highlighted+="\033[2;36m${original:j:1}"
-                fi
-            done
-            printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' "${spinner[pos % ${#spinner[@]}]}" "$highlighted"
-            sleep 0.08
-            pos=$(( (pos + 1) % len ))
-        done
-
-        trap - INT TERM
-        (( had_monitor )) && set -m
-        READLINE_LINE=$(< "$tmpfile")
-        READLINE_POINT=${#READLINE_LINE}
-        rm -f "$tmpfile"
-        printf '\r\033[K'
-    fi
-}
-bind -x '"\C-g": _shai_transform'
+# Or with all features including Ctrl+G keybinding
+shell-ai integration generate bash --preset full
 ```
 
-</details>
+Then add the source line to your shell config as instructed.
+
+**Available presets:**
+
+| Feature                         | `minimal` | `standard` | `full` |
+|---------------------------------|:---------:|:----------:|:------:|
+| Tab completions                 |     ✓     |     ✓      |   ✓    |
+| Aliases (`??`, `explain`)       |           |     ✓      |   ✓    |
+| Ctrl+G keybinding for `suggest` |           |            |   ✓    |
+
+Default: `standard`
+
+**Customization examples:**
+
+```bash
+# Standard preset plus keybinding
+shell-ai integration generate zsh --preset standard --add keybinding
+
+# Full preset without aliases
+shell-ai integration generate fish --preset full --remove aliases
+
+# Update all installed integrations after upgrading shell-ai
+shell-ai integration update
+
+# View available features and installed integrations
+shell-ai integration list
+```
+
+**Alternative: eval on startup (not recommended)**
+
+Instead of generating a static file, you can eval the integration directly in your shell config:
+
+```bash
+# Bash/Zsh
+eval "$(shell-ai integration generate bash --preset=full --stdout)"
+
+# Fish
+shell-ai integration generate fish --preset=full --stdout | source
+
+# PowerShell
+Invoke-Expression (shell-ai integration generate powershell --preset=full --stdout | Out-String)
+```
+
+This approach doesn't write files to your config directory and is always up to date after upgrading Shell-AI, but adds several milliseconds to shell startup (the time to spawn Shell-AI and generate the integration). The file-based approach above is recommended for faster startup.
+
+### Performance
+
+The shell integration file is pre-compiled to minimize shell startup overhead. Here are benchmark results comparing the overhead of each preset.
 
 <details>
-<summary>Zsh (~/.zshrc)</summary>
+<summary>Benchmark Results</summary>
 
-```zsh
-: Aliases
-alias '??'='shell-ai suggest --'
-alias 'explain'='shell-ai explain --'
+This is how much slower Shell-AI v0.5.1's shell integration makes shell startup:
 
-: Ctrl+G: Transform current line into a shell command
-_shai_transform() {
-    if [[ -n "$BUFFER" ]]; then
-        local original="$BUFFER"
-        local len=${#original}
-        local tmpfile=$(mktemp)
-        local spinner=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
-        local pid
+#### Baseline: Sourcing an Empty File
 
-        setopt LOCAL_OPTIONS NO_NOTIFY NO_MONITOR LOCAL_TRAPS
-        trap 'kill $pid 2>/dev/null; rm -f "$tmpfile"; printf "\r\033[K"; zle reset-prompt; return' INT TERM
+| Shell      |    N |     Min |      Q1 |  Median |      Q3 |     Max |    Mean | Std Dev |
+|------------|-----:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|
+| Bash       | 1000 |  1.06ms |  1.18ms |  1.21ms |  1.31ms |  2.95ms |  1.27ms |  0.16ms |
+| Zsh        | 1000 |  1.17ms |  1.33ms |  1.37ms |  1.45ms |  4.87ms |  1.42ms |  0.23ms |
+| Fish       | 1000 |  0.78ms |  0.88ms |  0.91ms |  0.96ms |  2.69ms |  0.94ms |  0.12ms |
+| PowerShell |  100 | 79.03ms | 81.09ms | 82.48ms | 84.91ms | 98.50ms | 83.32ms |  3.31ms |
 
-        (shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null | head -1 > "$tmpfile") &!
-        pid=$!
+#### Incremental Overhead (Above Baseline)
 
-        local pos=0
-        while kill -0 $pid 2>/dev/null; do
-            local highlighted=""
-            for ((j=1; j<=len; j++)); do
-                local dist=$(( j - 1 - pos ))
-                (( dist < 0 )) && dist=$(( -dist ))
-                local wrap_dist=$(( len - dist ))
-                (( pos > 2 && wrap_dist < dist )) && dist=$wrap_dist
-                if (( dist == 0 )); then
-                    highlighted+="\033[1;96m${original[j]}"
-                elif (( dist <= 2 )); then
-                    highlighted+="\033[0;36m${original[j]}"
-                else
-                    highlighted+="\033[2;36m${original[j]}"
-                fi
-            done
-            printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' "${spinner[pos % ${#spinner[@]} + 1]}" "$highlighted"
-            sleep 0.08
-            pos=$(( (pos + 1) % len ))
-        done
+| Shell      | Preset   | Overhead (Mean) |
+|------------|----------|----------------:|
+| Bash       | minimal  |         +1.56ms |
+| Bash       | standard |         +1.64ms |
+| Bash       | full     |         +2.11ms |
+| Zsh        | minimal  |         +1.98ms |
+| Zsh        | standard |         +2.05ms |
+| Zsh        | full     |         +2.43ms |
+| Fish       | minimal  |         +2.42ms |
+| Fish       | standard |         +2.56ms |
+| Fish       | full     |         +2.69ms |
+| PowerShell | minimal  |        +20.30ms |
+| PowerShell | standard |        +21.67ms |
+| PowerShell | full     |       +125.24ms |
 
-        BUFFER=$(< "$tmpfile")
-        rm -f "$tmpfile"
-        printf '\r\033[K'
-        zle reset-prompt
-        zle end-of-line
-    fi
-}
-zle -N _shai_transform
-bindkey '^G' _shai_transform
-```
+#### Total Overhead (What Users Experience)
 
-</details>
+##### Bash
 
-<details>
-<summary>Fish (~/.config/fish/config.fish)</summary>
+| Preset           |    N |    Min |     Q1 | Median |     Q3 |    Max |   Mean | Std Dev |
+|------------------|-----:|-------:|-------:|-------:|-------:|-------:|-------:|--------:|
+| blank (baseline) | 1000 | 1.06ms | 1.18ms | 1.21ms | 1.31ms | 2.95ms | 1.27ms |  0.16ms |
+| minimal          | 1000 | 2.55ms | 2.71ms | 2.78ms | 2.89ms | 3.85ms | 2.82ms |  0.17ms |
+| standard         | 1000 | 2.62ms | 2.76ms | 2.85ms | 2.98ms | 6.08ms | 2.91ms |  0.25ms |
+| full             | 1000 | 2.97ms | 3.22ms | 3.32ms | 3.47ms | 6.55ms | 3.38ms |  0.26ms |
 
-```fish
-# Abbreviations
-abbr -a '??' 'shell-ai suggest --'
-abbr -a 'explain' 'shell-ai explain --'
+##### Zsh
 
-# Ctrl+G: Transform current line into a shell command
-function _shai_transform
-    set -l cmd (commandline)
-    test -z "$cmd"; and return
+| Preset           |    N |    Min |     Q1 | Median |     Q3 |    Max |   Mean | Std Dev |
+|------------------|-----:|-------:|-------:|-------:|-------:|-------:|-------:|--------:|
+| blank (baseline) | 1000 | 1.17ms | 1.33ms | 1.37ms | 1.45ms | 4.87ms | 1.42ms |  0.23ms |
+| minimal          | 1000 | 3.03ms | 3.27ms | 3.35ms | 3.47ms | 5.07ms | 3.40ms |  0.20ms |
+| standard         | 1000 | 3.07ms | 3.32ms | 3.41ms | 3.55ms | 5.86ms | 3.47ms |  0.25ms |
+| full             | 1000 | 3.40ms | 3.69ms | 3.80ms | 3.94ms | 6.20ms | 3.85ms |  0.27ms |
 
-    set -g __shai_cmd $cmd
-    set -g __shai_tmp (mktemp)
-    set -g __shai_pid
-    set -g __shai_cancelled 0
-    set -l spinner ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏
-    set -l len (string length "$cmd")
+##### Fish
 
-    function __shai_cancel --on-event fish_cancel --on-signal INT
-        set -g __shai_cancelled 1
-        kill $__shai_pid 2>/dev/null
-    end
+| Preset           |    N |    Min |     Q1 | Median |     Q3 |    Max |   Mean | Std Dev |
+|------------------|-----:|-------:|-------:|-------:|-------:|-------:|-------:|--------:|
+| blank (baseline) | 1000 | 0.78ms | 0.88ms | 0.91ms | 0.96ms | 2.69ms | 0.94ms |  0.12ms |
+| minimal          | 1000 | 3.03ms | 3.19ms | 3.27ms | 3.44ms | 4.64ms | 3.36ms |  0.26ms |
+| standard         | 1000 | 3.15ms | 3.29ms | 3.40ms | 3.64ms | 5.50ms | 3.50ms |  0.29ms |
+| full             | 1000 | 3.30ms | 3.45ms | 3.53ms | 3.70ms | 5.58ms | 3.63ms |  0.27ms |
 
-    sh -c 'shell-ai --frontend=noninteractive suggest -- "$1" 2>/dev/null | head -1 > "$2"' _ "$cmd" "$__shai_tmp" &
-    set __shai_pid $last_pid
+##### PowerShell
 
-    set -l pos 0
-    while kill -0 $__shai_pid 2>/dev/null; and test $__shai_cancelled -eq 0
-        set -l highlighted ""
-        for j in (seq $len)
-            set -l dist (math "abs($j - 1 - $pos)")
-            set -l wrap_dist (math "$len - $dist")
-            test $pos -gt 2 -a $wrap_dist -lt $dist; and set dist $wrap_dist
-            if test $dist -eq 0
-                set highlighted "$highlighted"\e"[1;96m"(string sub -s $j -l 1 "$cmd")
-            else if test $dist -le 2
-                set highlighted "$highlighted"\e"[0;36m"(string sub -s $j -l 1 "$cmd")
-            else
-                set highlighted "$highlighted"\e"[2;36m"(string sub -s $j -l 1 "$cmd")
-            end
-        end
-        printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' $spinner[(math "$pos % 10 + 1")] "$highlighted"
-        sleep 0.08 &; wait $last_pid; or break
-        set pos (math "($pos + 1) % $len")
-    end
+| Preset           |   N |      Min |       Q1 |   Median |       Q3 |      Max |     Mean | Std Dev |
+|------------------|----:|---------:|---------:|---------:|---------:|---------:|---------:|--------:|
+| blank (baseline) | 100 |  79.03ms |  81.09ms |  82.48ms |  84.91ms |  98.50ms |  83.32ms |  3.31ms |
+| minimal          | 100 |  96.98ms | 101.39ms | 103.04ms | 105.27ms | 118.27ms | 103.62ms |  3.95ms |
+| standard         | 100 |  99.77ms | 103.34ms | 104.47ms | 106.13ms | 115.67ms | 104.98ms |  3.12ms |
+| full             | 100 | 200.65ms | 205.15ms | 207.09ms | 209.94ms | 241.00ms | 208.55ms |  5.94ms |
 
-    functions -e __shai_cancel
-    printf '\r\033[K'
-    if test $__shai_cancelled -eq 1
-        commandline -r $__shai_cmd
-    else
-        commandline -r (cat $__shai_tmp)
-    end
-    rm -f $__shai_tmp
-    set -e __shai_pid __shai_tmp __shai_cmd __shai_cancelled
-    commandline -f repaint
-    commandline -f end-of-line
-end
-bind \cg _shai_transform
-```
+#### Methodology
 
-</details>
-
-<details>
-<summary>PowerShell ($PROFILE)</summary>
-
-```powershell
-# Functions
-function ?? { shell-ai suggest -- @args }
-function explain { shell-ai explain -- @args }
-
-# Ctrl+G: Transform current line into a shell command
-Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
-    $line = $null
-    [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$null)
-    if ($line) {
-        $len = $line.Length
-        $spinner = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
-        $cancelled = $false
-
-        $job = Start-Job -ScriptBlock {
-            param($l)
-            shell-ai --frontend=noninteractive suggest -- $l 2>$null | Select-Object -First 1
-        } -ArgumentList $line
-
-        $pos = 0
-        while ($job.State -eq 'Running') {
-            if ([Console]::KeyAvailable) {
-                $key = [Console]::ReadKey($true)
-                if ($key.Key -eq 'C' -and $key.Modifiers -eq 'Control') {
-                    $cancelled = $true
-                    break
-                }
-            }
-            $highlighted = ""
-            for ($j = 0; $j -lt $len; $j++) {
-                $dist = [Math]::Abs($j - $pos)
-                $wrapDist = $len - $dist
-                if ($pos -gt 2 -and $wrapDist -lt $dist) { $dist = $wrapDist }
-                if ($dist -eq 0) {
-                    $highlighted += "`e[1;96m$($line[$j])"
-                } elseif ($dist -le 2) {
-                    $highlighted += "`e[0;36m$($line[$j])"
-                } else {
-                    $highlighted += "`e[2;36m$($line[$j])"
-                }
-            }
-            $spin = $spinner[$pos % $spinner.Length]
-            [Console]::Write("`r`e[K`e[1;36m$spin`e[0m $highlighted`e[0m")
-            Start-Sleep -Milliseconds 80
-            $pos = ($pos + 1) % $len
-        }
-
-        if ($cancelled) {
-            Stop-Job $job
-            Remove-Job $job
-            [Console]::Write("`r`e[K")
-            [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
-        } else {
-            $result = Receive-Job $job
-            Remove-Job $job
-            [Console]::Write("`r`e[K")
-            [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, $result)
-            [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
-        }
-    }
-}
-```
+To reproduce these benchmarks, run `cargo run --package xtask -- bench-integration [sample_count]` from this repository.
 
 </details>
 

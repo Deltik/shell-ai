@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
+ctrlc = "3"
 flate2 = "1"
 tar = "0.4"
 zip = { version = "6", default-features = false, features = ["deflate"] }

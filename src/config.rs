@@ -1458,8 +1458,9 @@ impl AppConfig {
 
     /// Print configuration in human-readable format.
     pub fn print_human(&self) {
-        println!("{}", "Shell-AI Configuration".bold());
-        println!("{}", "======================".bold());
+        const HEADING: &str = "Shell-AI Configuration";
+        println!("{}", HEADING.bold());
+        println!("{}", "=".repeat(HEADING.len()));
         println!();
 
         let sections = [
