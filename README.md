@@ -66,7 +66,7 @@ ln -v -s shell-ai ~/.cargo/bin/shai
 - **Single binary**: No Python, no runtime dependencies. Just one executable.
 - **Shell integration**: Tab completions, aliases, and Ctrl+G keybinding via `shell-ai integration generate`.
 - **Multilingual**: Describe tasks in any language the AI model understands.
-- **Explain with citations**: `shell-ai explain` cites man pages, not just AI knowledge.
+- **Explain from `man`**: `shell-ai explain` includes grounding from man pages, not just AI knowledge.
 - **Multiple providers**: OpenAI, Azure OpenAI, Groq, Ollama (local), and Mistral.
 - **Interactive workflow**: Select a suggestion, then explain it, execute it, copy it, or revise it.
 - **Vim-style navigation**: j/k keys, number shortcuts (1-9), arrow keys.
