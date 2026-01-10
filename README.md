@@ -353,6 +353,7 @@ Instead of generating a static file, you can eval the integration directly in yo
 ```bash
 # Bash/Zsh
 eval "$(shell-ai integration generate bash --preset=full --stdout)"
+eval "$(shell-ai integration generate zsh --preset=full --stdout)"
 
 # Fish
 shell-ai integration generate fish --preset=full --stdout | source

@@ -793,7 +793,7 @@ _shai_transform() {
 
         trap - INT TERM
         (( had_monitor )) && set -m
-        READLINE_LINE=$(< "$tmpfile")
+        READLINE_LINE=$(cat "$tmpfile")
         READLINE_POINT=${#READLINE_LINE}
         rm -f "$tmpfile"
         printf '\r\033[K'

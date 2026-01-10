@@ -7,6 +7,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.5.2 (UNRELEASED)
+
+### Fixed
+
+- **Bash keybinding integration: first argument no longer ignored**
+
+  Fixed a bug where the Bash keybinding (Ctrl+G) would corrupt the command line, causing the first word to be lost. For example, `uptime -s` would display correctly but execute as two separate commands (`uptime` then `-s`).
+
+  The root cause is a Bash bug where `$(< file)` corrupts `READLINE_LINE` when used in a `bind -x` context. The workaround uses `$(cat file)` instead, which forks a subprocess and avoids the corruption.
+
+  This bug is not present in Bash 5.3.
+
 ## v0.5.1 (2025-12-22)
 
 ### Added
