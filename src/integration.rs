@@ -767,7 +767,7 @@ _shai_transform() {
         set +m
         trap 'kill $pid 2>/dev/null; (( had_monitor )) && set -m; rm -f "$tmpfile"; printf "\r\033[K"; trap - INT TERM; return' INT TERM
 
-        { shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null | head -1 > "$tmpfile" & } 2>/dev/null
+        { shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null > "$tmpfile" & } 2>/dev/null
         pid=$!
 
         local pos=0
@@ -822,7 +822,7 @@ _shai_transform() {
         setopt LOCAL_OPTIONS NO_NOTIFY NO_MONITOR LOCAL_TRAPS
         trap 'kill $pid 2>/dev/null; rm -f "$tmpfile"; printf "\r\033[K"; zle reset-prompt; return' INT TERM
 
-        (shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null | head -1 > "$tmpfile") &!
+        (shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null > "$tmpfile") &!
         pid=$!
 
         local pos=0
@@ -883,7 +883,7 @@ function _shai_transform
         kill $__shai_pid 2>/dev/null
     end
 
-    sh -c 'shell-ai --frontend=noninteractive suggest -- "$1" 2>/dev/null | head -1 > "$2"' _ "$cmd" "$__shai_tmp" &
+    sh -c 'shell-ai --frontend=noninteractive suggest -- "$1" 2>/dev/null > "$2"' _ "$cmd" "$__shai_tmp" &
     set __shai_pid $last_pid
 
     set -l pos 0
@@ -940,7 +940,7 @@ Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
 
         $job = Start-Job -ScriptBlock {
             param($l)
-            shell-ai --frontend=noninteractive suggest -- $l 2>$null | Select-Object -First 1
+            shell-ai --frontend=noninteractive suggest -- $l 2>$null
         } -ArgumentList $line
 
         $pos = 0
@@ -977,7 +977,7 @@ Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
             [Console]::Write("`r`e[K")
             [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
         } else {
-            $result = Receive-Job $job
+            $result = (Receive-Job $job) -join "`n"
             Remove-Job $job
             [Console]::Write("`r`e[K")
             [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, $result)

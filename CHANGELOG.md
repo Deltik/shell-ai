@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.5.2 (UNRELEASED)
 
+### Added
+
+- **Multi-line command support for Ctrl+G keybinding**
+
+  The keybinding integrations for all shells (Bash, Zsh, Fish, PowerShell) now support multi-line command output, in case the generated suggestion spans multiple lines. Previously, only the first line was used.
+
 ### Fixed
 
 - **Bash keybinding integration: first argument no longer ignored**
