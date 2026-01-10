@@ -6,7 +6,7 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 use serde_json::json;
 
-use crate::config::{OutputFormat, ValidatedConfig};
+use crate::config::{resolve_locale, OutputFormat, ValidatedConfig};
 use crate::http;
 use crate::progress::Progress;
 use crate::provider::ProviderConfig;
@@ -305,11 +305,19 @@ fn build_explain_schema(with_citations: bool) -> serde_json::Value {
 
 /// Build the system prompt for the explain command.
 /// When `with_citations` is true, includes citation instructions.
-fn build_system_prompt(with_citations: bool) -> String {
+/// When `locale` is Some, includes a hint to respond in that language.
+fn build_system_prompt(with_citations: bool, locale: Option<&str>) -> String {
     let mut prompt = String::from(
         "You are a shell command explainer. The user will provide a shell command, \
          and you will explain it by breaking it down into its components.\n\n"
     );
+
+    if let Some(loc) = locale {
+        prompt.push_str(&format!(
+            "Respond in the user's preferred locale/language: {}\n\n",
+            loc
+        ));
+    }
 
     if with_citations {
         prompt.push_str(
@@ -430,6 +438,9 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
         log::debug!("  - {} ({} chars)", r.command, r.char_count);
     }
 
+    // Resolve the effective locale for AI responses
+    let locale = resolve_locale(config.locale.value.as_deref());
+
     // Retry loop: on 413, drop the shortest man page reference and retry
     loop {
         // Determine if we have documentation to cite
@@ -437,7 +448,7 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
 
         // Build schema and prompt dynamically based on whether we have docs
         let schema_value = build_explain_schema(with_citations);
-        let system_prompt = build_system_prompt(with_citations);
+        let system_prompt = build_system_prompt(with_citations, locale.as_deref());
 
         // Build messages array:
         // 1. System message with instructions

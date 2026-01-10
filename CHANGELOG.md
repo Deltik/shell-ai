@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Locale-aware AI responses**
+
+  Shell-AI now auto-detects your system locale from `LANG`/`LC_ALL` environment variables and hints the AI to respond in your preferred language. This applies to both `suggest` and `explain` commands.
+
+  Configure with:
+  - `--locale <value>` CLI flag
+  - `SHAI_LOCALE` environment variable
+  - `locale` setting in config file
+
+  Set to an empty string (`locale = ""` or `SHAI_LOCALE=""`) to disable locale hints.
+
 - **Multi-line command support for Ctrl+G keybinding**
 
   The keybinding integrations for all shells (Bash, Zsh, Fish, PowerShell) now support multi-line command output, in case the generated suggestion spans multiple lines. Previously, only the first line was used.

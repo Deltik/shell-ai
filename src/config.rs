@@ -167,6 +167,7 @@ pub mod env {
     pub const SHAI_MAX_REFERENCE_CHARS: &str = "SHAI_MAX_REFERENCE_CHARS";
     pub const SHAI_MAX_TOKENS: &str = "SHAI_MAX_TOKENS";
     pub const SHAI_DEBUG: &str = "SHAI_DEBUG";
+    pub const SHAI_LOCALE: &str = "SHAI_LOCALE";
 
     // OpenAI provider
     pub const OPENAI_API_KEY: &str = "OPENAI_API_KEY";
@@ -229,18 +230,84 @@ impl Section {
 #[derive(Debug, Clone, Copy)]
 pub struct FieldMeta {
     pub name: &'static str,
+    pub description: &'static str,
     pub env_var: Option<&'static str>,
     pub env_aliases: &'static [&'static str],
-    pub description: &'static str,
     pub default: Option<&'static str>,
     pub required: bool,
     pub section: Section,
     pub deprecated: bool,
     pub sensitive: bool,
-    pub virtual_field: bool, // true for fields not in TomlConfig (e.g., skip_confirm)
+    pub virtual_field: bool,
+    pub allow_empty: bool,
 }
 
 impl FieldMeta {
+    /// Create a new FieldMeta with sensible defaults.
+    pub const fn new(name: &'static str, description: &'static str) -> Self {
+        Self {
+            name,
+            description,
+            env_var: None,
+            env_aliases: &[],
+            default: None,
+            required: false,
+            section: Section::Provider,
+            deprecated: false,
+            sensitive: false,
+            virtual_field: false,
+            allow_empty: false,
+        }
+    }
+
+    /// Set the environment variable for this field.
+    pub const fn env(mut self, env_var: &'static str) -> Self {
+        self.env_var = Some(env_var);
+        self
+    }
+
+    /// Set environment variable aliases.
+    pub const fn env_aliases(mut self, aliases: &'static [&'static str]) -> Self {
+        self.env_aliases = aliases;
+        self
+    }
+
+    /// Set the default value.
+    pub const fn default(mut self, value: &'static str) -> Self {
+        self.default = Some(value);
+        self
+    }
+
+    /// Mark this field as required.
+    pub const fn required(mut self) -> Self {
+        self.required = true;
+        self
+    }
+
+    /// Set the section for display grouping.
+    pub const fn section(mut self, section: Section) -> Self {
+        self.section = section;
+        self
+    }
+
+    /// Mark this field as deprecated.
+    pub const fn deprecated(mut self) -> Self {
+        self.deprecated = true;
+        self
+    }
+
+    /// Mark this field as virtual (not in TomlConfig).
+    pub const fn virtual_field(mut self) -> Self {
+        self.virtual_field = true;
+        self
+    }
+
+    /// Mark this field as allowing empty string as a valid value.
+    pub const fn allow_empty(mut self) -> Self {
+        self.allow_empty = true;
+        self
+    }
+
     /// Get the default value as a serde_json::Value.
     pub fn default_json_value(&self) -> Option<serde_json::Value> {
         self.default.map(|s| {
@@ -267,6 +334,30 @@ pub struct CommonFieldMeta {
     pub description: &'static str,
     pub required: bool,
     pub sensitive: bool,
+}
+
+impl CommonFieldMeta {
+    /// Create a new CommonFieldMeta with sensible defaults.
+    pub const fn new(name: &'static str, description: &'static str) -> Self {
+        Self {
+            name,
+            description,
+            required: false,
+            sensitive: false,
+        }
+    }
+
+    /// Mark this field as required.
+    pub const fn required(mut self) -> Self {
+        self.required = true;
+        self
+    }
+
+    /// Mark this field as sensitive (will be masked in output).
+    pub const fn sensitive(mut self) -> Self {
+        self.sensitive = true;
+        self
+    }
 }
 
 /// Per-provider override for common field env_var, default, and required
@@ -308,6 +399,7 @@ impl ProviderMeta {
             section: Section::ProviderSpecific,
             deprecated: false,
             virtual_field: false,
+            allow_empty: false,
         }
     }
 
@@ -335,154 +427,56 @@ impl ProviderMeta {
 
 /// Common provider fields shared across all providers.
 pub const COMMON_PROVIDER_FIELDS: &[CommonFieldMeta] = &[
-    CommonFieldMeta {
-        name: "api_key",
-        description: "API key for authentication",
-        required: true,
-        sensitive: true,
-    },
-    CommonFieldMeta {
-        name: "api_base",
-        description: "API base URL",
-        required: false,
-        sensitive: false,
-    },
-    CommonFieldMeta {
-        name: "model",
-        description: "Model to use",
-        required: false,
-        sensitive: false,
-    },
-    CommonFieldMeta {
-        name: "max_tokens",
-        description: "Max tokens for AI completion",
-        required: false,
-        sensitive: false,
-    },
+    CommonFieldMeta::new("api_key", "API key for authentication")
+        .required()
+        .sensitive(),
+    CommonFieldMeta::new("api_base", "API base URL"),
+    CommonFieldMeta::new("model", "Model to use"),
+    CommonFieldMeta::new("max_tokens", "Max tokens for AI completion"),
 ];
 
 /// Global settings metadata.
 pub const GLOBAL_SETTINGS_METADATA: &[FieldMeta] = &[
-    FieldMeta {
-        name: "provider",
-        env_var: Some(env::SHAI_API_PROVIDER),
-        env_aliases: &[env::SHAI_PROVIDER],
-        description: "Provider to use",
-        default: None,
-        required: true,
-        section: Section::Provider,
-        deprecated: false,
-        sensitive: false,
-        virtual_field: false,
-    },
-    FieldMeta {
-        name: "model",
-        env_var: Some(env::SHAI_MODEL),
-        env_aliases: &[],
-        description: "Override model (takes precedence over provider-specific)",
-        default: None,
-        required: false,
-        section: Section::Provider,
-        deprecated: false,
-        sensitive: false,
-        virtual_field: false,
-    },
-    FieldMeta {
-        name: "temperature",
-        env_var: Some(env::SHAI_TEMPERATURE),
-        env_aliases: &[],
-        description: "Sampling temperature (0.0 = deterministic, 1.0 = creative)",
-        default: Some("0.05"),
-        required: false,
-        section: Section::Provider,
-        deprecated: false,
-        sensitive: false,
-        virtual_field: false,
-    },
-    FieldMeta {
-        name: "suggestion_count",
-        env_var: Some(env::SHAI_SUGGESTION_COUNT),
-        env_aliases: &[],
-        description: "Number of suggestions to generate",
-        default: Some("3"),
-        required: false,
-        section: Section::Suggest,
-        deprecated: false,
-        sensitive: false,
-        virtual_field: false,
-    },
-    FieldMeta {
-        name: "skip_confirm",
-        env_var: Some(env::SHAI_SKIP_CONFIRM),
-        env_aliases: &[],
-        description: "Legacy: skip confirmation (implies frontend=noninteractive)",
-        default: Some("false"),
-        required: false,
-        section: Section::Ui,
-        deprecated: true,
-        sensitive: false,
-        virtual_field: true, // Not in TomlConfig
-    },
-    FieldMeta {
-        name: "frontend",
-        env_var: Some(env::SHAI_FRONTEND),
-        env_aliases: &[],
-        description: "UI mode: automatic (default), dialog, readline, or noninteractive",
-        default: Some("automatic"),
-        required: false,
-        section: Section::Ui,
-        deprecated: false,
-        sensitive: false,
-        virtual_field: false,
-    },
-    FieldMeta {
-        name: "output_format",
-        env_var: Some(env::SHAI_OUTPUT_FORMAT),
-        env_aliases: &[],
-        description: "Output format: human or json",
-        default: Some("human"),
-        required: false,
-        section: Section::Ui,
-        deprecated: false,
-        sensitive: false,
-        virtual_field: false,
-    },
-    FieldMeta {
-        name: "max_reference_chars",
-        env_var: Some(env::SHAI_MAX_REFERENCE_CHARS),
-        env_aliases: &[],
-        description: "Max characters for man page references in explain",
-        default: Some("262144"),
-        required: false,
-        section: Section::Explain,
-        deprecated: false,
-        sensitive: false,
-        virtual_field: false,
-    },
-    FieldMeta {
-        name: "max_tokens",
-        env_var: Some(env::SHAI_MAX_TOKENS),
-        env_aliases: &[],
-        description: "Max tokens for an AI completion (optional, API auto-calculates when omitted)",
-        default: None,
-        required: false,
-        section: Section::Provider,
-        deprecated: false,
-        sensitive: false,
-        virtual_field: false,
-    },
-    FieldMeta {
-        name: "debug",
-        env_var: Some(env::SHAI_DEBUG),
-        env_aliases: &[],
-        description: "Debug log level",
-        default: None,
-        required: false,
-        section: Section::Ui,
-        deprecated: false,
-        sensitive: false,
-        virtual_field: false,
-    },
+    FieldMeta::new("provider", "Provider to use")
+        .env(env::SHAI_API_PROVIDER)
+        .env_aliases(&[env::SHAI_PROVIDER])
+        .required(),
+    FieldMeta::new("model", "Override model (takes precedence over provider-specific)")
+        .env(env::SHAI_MODEL),
+    FieldMeta::new("temperature", "Sampling temperature (0.0 = deterministic, 1.0 = creative)")
+        .env(env::SHAI_TEMPERATURE)
+        .default("0.05"),
+    FieldMeta::new("suggestion_count", "Number of suggestions to generate")
+        .env(env::SHAI_SUGGESTION_COUNT)
+        .default("3")
+        .section(Section::Suggest),
+    FieldMeta::new("skip_confirm", "Legacy: skip confirmation (implies frontend=noninteractive)")
+        .env(env::SHAI_SKIP_CONFIRM)
+        .default("false")
+        .section(Section::Ui)
+        .deprecated()
+        .virtual_field(),
+    FieldMeta::new("frontend", "UI mode: automatic (default), dialog, readline, or noninteractive")
+        .env(env::SHAI_FRONTEND)
+        .default("automatic")
+        .section(Section::Ui),
+    FieldMeta::new("output_format", "Output format: human or json")
+        .env(env::SHAI_OUTPUT_FORMAT)
+        .default("human")
+        .section(Section::Ui),
+    FieldMeta::new("max_reference_chars", "Max characters for man page references in explain")
+        .env(env::SHAI_MAX_REFERENCE_CHARS)
+        .default("262144")
+        .section(Section::Explain),
+    FieldMeta::new("max_tokens", "Max tokens for an AI completion (optional, API auto-calculates when omitted)")
+        .env(env::SHAI_MAX_TOKENS),
+    FieldMeta::new("debug", "Debug log level")
+        .env(env::SHAI_DEBUG)
+        .section(Section::Ui),
+    FieldMeta::new("locale", "Language/locale for AI responses (auto-detected from LANG/LC_ALL by default, set explicitly to override, or empty string to disable)")
+        .env(env::SHAI_LOCALE)
+        .section(Section::Ui)
+        .allow_empty(),
 ];
 
 /// Provider-specific metadata.
@@ -498,18 +492,9 @@ pub const PROVIDER_METADATA: &[ProviderMeta] = &[
             FieldOverride { name: "max_tokens", env_var: Some(env::OPENAI_MAX_TOKENS), default: None, required: None },
         ],
         extra_fields: &[
-            FieldMeta {
-                name: "organization",
-                env_var: Some(env::OPENAI_ORGANIZATION),
-                env_aliases: &[],
-                description: "Organization ID for API billing (for multi-org accounts)",
-                default: None,
-                required: false,
-                section: Section::ProviderSpecific,
-                deprecated: false,
-                sensitive: false,
-                virtual_field: false,
-            },
+            FieldMeta::new("organization", "Organization ID for API billing (for multi-org accounts)")
+                .env(env::OPENAI_ORGANIZATION)
+                .section(Section::ProviderSpecific),
         ],
         skip_common: &[],
     },
@@ -537,30 +522,14 @@ pub const PROVIDER_METADATA: &[ProviderMeta] = &[
             FieldOverride { name: "max_tokens", env_var: Some(env::AZURE_MAX_TOKENS), default: None, required: None },
         ],
         extra_fields: &[
-            FieldMeta {
-                name: "deployment_name",
-                env_var: Some(env::AZURE_DEPLOYMENT_NAME),
-                env_aliases: &[],
-                description: "Deployment name for your model",
-                default: None,
-                required: true,
-                section: Section::ProviderSpecific,
-                deprecated: false,
-                sensitive: false,
-                virtual_field: false,
-            },
-            FieldMeta {
-                name: "api_version",
-                env_var: Some(env::OPENAI_API_VERSION),
-                env_aliases: &[],
-                description: "Azure API version",
-                default: Some("2023-05-15"),
-                required: false,
-                section: Section::ProviderSpecific,
-                deprecated: false,
-                sensitive: false,
-                virtual_field: false,
-            },
+            FieldMeta::new("deployment_name", "Deployment name for your model")
+                .env(env::AZURE_DEPLOYMENT_NAME)
+                .section(Section::ProviderSpecific)
+                .required(),
+            FieldMeta::new("api_version", "Azure API version")
+                .env(env::OPENAI_API_VERSION)
+                .section(Section::ProviderSpecific)
+                .default("2023-05-15"),
         ],
         skip_common: &["model"], // Azure uses deployment_name instead of model
     },
@@ -810,7 +779,9 @@ fn env_to_json(builder: &mut ConfigBuilder) -> serde_json::Value {
                 return;
             }
             if let Ok(value) = std::env::var(env_var) {
-                if !value.is_empty() {
+                // For fields with allow_empty, accept empty strings as valid values
+                // For other fields, skip empty strings
+                if !value.is_empty() || field.allow_empty {
                     obj.insert(field.name.to_string(), serde_json::Value::String(value));
                     seen_paths.insert(field.name.to_string());
                     builder.record_env_var(field.name, env_var);
@@ -882,6 +853,8 @@ pub struct CliOverrides {
     pub output_format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub debug: Option<DebugLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
 }
 
 /// Convert CLI arguments to a JSON object using serde.
@@ -947,6 +920,7 @@ pub struct TomlConfig {
     #[serde(default, deserialize_with = "deserialize_flexible")]
     pub max_tokens: Option<u32>,
     pub debug: Option<DebugLevel>,
+    pub locale: Option<String>,
 
     // Provider-specific sections
     pub openai: Option<ProviderCredentials>,
@@ -979,6 +953,9 @@ pub struct AppConfig {
 
     // Debug/logging level
     pub debug: ConfigValue<Option<DebugLevel>>,
+
+    // Locale for AI responses
+    pub locale: ConfigValue<Option<String>>,
 
     // Provider credentials (HashMap instead of individual fields)
     pub providers: HashMap<Provider, ProviderCredentials>,
@@ -1151,6 +1128,10 @@ impl AppConfig {
             debug: ConfigValue::new(
                 parsed.debug,
                 sources.get("debug").copied().unwrap_or(ConfigSource::Default),
+            ),
+            locale: ConfigValue::new(
+                parsed.locale,
+                sources.get("locale").copied().unwrap_or(ConfigSource::Default),
             ),
             providers,
             sources,
@@ -1400,6 +1381,19 @@ impl AppConfig {
                     .map(|d| d.to_string())
                     .unwrap_or_else(|| "(not set)".to_string());
                 Some((value, self.debug.source))
+            }
+            "locale" => {
+                let display = match &self.locale.value {
+                    None => {
+                        match detect_system_locale() {
+                            Some(loc) => format!("{} (auto)", loc),
+                            None => "(auto, none found)".to_string(),
+                        }
+                    }
+                    Some(loc) if loc.is_empty() => "(disabled)".to_string(),
+                    Some(loc) => loc.clone(),
+                };
+                Some((display, self.locale.source))
             }
             _ => None,
         }
@@ -1936,4 +1930,35 @@ enum JsonValueLoadResult {
     Loaded(serde_json::Value, PathBuf),
     NotFound,
     ParseError(PathBuf, String),
+}
+
+// ============================================================================
+// Locale Detection and Resolution
+// ============================================================================
+
+/// Detect system locale from LANG/LC_ALL environment variables.
+/// Returns the language portion (e.g., "en_US" from "en_US.UTF-8").
+pub fn detect_system_locale() -> Option<String> {
+    for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(val) = std::env::var(var) {
+            let val = val.trim();
+            if !val.is_empty() && val != "C" && val != "POSIX" {
+                // Extract language part before encoding: "en_US.UTF-8" → "en_US"
+                return Some(val.split('.').next().unwrap_or(val).to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Resolve the effective locale value.
+/// - None → auto-detect from system LANG/LC_ALL
+/// - Some("") → disabled, no locale hint
+/// - Some(other) → use explicit value as-is
+pub fn resolve_locale(config_value: Option<&str>) -> Option<String> {
+    match config_value {
+        None => detect_system_locale(),  // Auto-detect by default
+        Some("") => None,                 // Empty string disables
+        Some(locale) => Some(locale.to_string()),
+    }
 }

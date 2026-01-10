@@ -6,7 +6,7 @@ use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::config::{AppConfig, Frontend, OutputFormat, ValidatedConfig};
+use crate::config::{resolve_locale, AppConfig, Frontend, OutputFormat, ValidatedConfig};
 use crate::explain;
 use crate::http;
 use crate::progress::Progress;
@@ -405,12 +405,14 @@ async fn generate_suggestions(
     let prompt_string = prompt.to_string();
     let ctx_string = if ctx_enabled { ctx_buffer.to_string() } else { String::new() };
     let prov = ProviderConfig::from_validated(validated);
+    let locale = resolve_locale(config.locale.value.as_deref());
 
     let tasks = stream::iter(0..count).map(|_| {
         let p = prompt_string.clone();
         let c = ctx_string.clone();
         let prov = prov.clone();
-        async move { suggest_once(&prov, &p, &c).await }
+        let loc = locale.clone();
+        async move { suggest_once(&prov, &p, &c, loc.as_deref()).await }
     });
 
     let mut results: Vec<Suggestion> = Vec::new();
@@ -451,6 +453,7 @@ async fn suggest_once(
     provider: &ProviderConfig,
     prompt: &str,
     ctx_buffer: &str,
+    locale: Option<&str>,
 ) -> Result<Option<Suggestion>> {
     let mut system_message = String::from(
         "You are an expert at using shell commands. Respond with a JSON object only, \
@@ -472,6 +475,13 @@ async fn suggest_once(
         std::env::consts::ARCH
     );
     system_message.push_str(&platform_string);
+
+    if let Some(loc) = locale {
+        system_message.push_str(&format!(
+            " Respond in the user's preferred locale/language: {}.",
+            loc
+        ));
+    }
 
     let schema_value: serde_json::Value = serde_json::from_str(SUGGEST_SCHEMA)
         .context("invalid internal suggest JSON schema")?;

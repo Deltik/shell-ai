@@ -65,7 +65,7 @@ ln -v -s shell-ai ~/.cargo/bin/shai
 
 - **Single binary**: No Python, no runtime dependencies. Just one executable.
 - **Shell integration**: Tab completions, aliases, and Ctrl+G keybinding via `shell-ai integration generate`.
-- **Multilingual**: Describe tasks in any language the AI model understands.
+- **Multilingual**: Describe tasks in any language the AI model understands. Responses adapt to your system locale.
 - **Explain from `man`**: `shell-ai explain` includes grounding from man pages, not just AI knowledge.
 - **Multiple providers**: OpenAI, Azure OpenAI, Groq, Ollama (local), and Mistral.
 - **Interactive workflow**: Select a suggestion, then explain it, execute it, copy it, or revise it.
@@ -89,9 +89,11 @@ Run `shell-ai --help` for all options, or `shell-ai config schema` for the full 
 |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|
 | [![printf '#!/bin/bash\n\npip install "$1" &\neasy_install "$1" &\nbrew install "$1" &\nnpm install "$1" &\nyum install "$1" & dnf install "$1" &\ndocker run "$1" &\npkg install "$1" &\napt-get install "$1" &\nsudo apt-get install "$1" &\nsteamcmd +app_update "$1" validate &\ngit clone https://github.com/"$1"/"$1" &\ncd "$1";./configure;make;make install &\ncurl "$1" \| bash &' \| shell-ai explain](docs/images/explain-1654.png)](docs/images/explain-1654.png) |
 
-### Multilingual: Danish Skills (Flersproget: Danskkundskaber)
+### Multilingual
 
-[![shai Oversæt rødgrød med fløde til engelsk med Ollama API og model gemma3:27b-cloud](docs/images/suggest-danish.gif)](docs/images/suggest-danish.gif)
+| Suggest in Danish (Foreslå på dansk)                                                                                                                     | Explain in French (Expliquer en français)                                                                                                             |
+|----------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [![shai Oversæt rødgrød med fløde til engelsk med Ollama API og model gemma3:27b-cloud](docs/images/suggest-danish.gif)](docs/images/suggest-danish.gif) | [![shell-ai --locale fr_FR explain -- 'sudo !!'](docs/images/explain-french-sudo-last-command.png)](docs/images/explain-french-sudo-last-command.png) |
 
 ### Challenging Tasks
 

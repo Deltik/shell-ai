@@ -45,6 +45,10 @@ pub struct GlobalOptions {
     /// Use --debug for debug level, --debug=trace for trace level.
     #[arg(long = "debug", short = 'd', global = true, value_enum, value_name = "LEVEL", num_args = 0..=1, default_missing_value = "debug", require_equals = true)]
     pub debug: Option<DebugLevel>,
+
+    /// Language/locale for AI responses (auto-detected by default, empty string to disable)
+    #[arg(long = "locale", global = true)]
+    pub locale: Option<String>,
 }
 
 /// Shell-AI CLI (full interface with subcommands)
@@ -164,6 +168,7 @@ fn global_to_cli_overrides(global: &GlobalOptions) -> CliOverrides {
         frontend: global.frontend.clone(),
         output_format: global.output_format.clone(),
         debug: global.debug,
+        locale: global.locale.clone(),
     }
 }
 
