@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   This bug is not present in Bash 5.3.
 
+- **Dialog frontend: multi-line commands now display correctly**
+
+  Fixed rendering issues when suggestions contained newlines. The menu now properly handles carriage returns and calculates the correct number of terminal lines, preventing display corruption when navigating between options.
+
 ## v0.5.1 (2025-12-22)
 
 ### Added

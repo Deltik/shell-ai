@@ -166,10 +166,11 @@ impl InteractiveSelect {
                 format!(" {} ", key_display).cyan().to_string()
             };
 
+            let label_for_display = opt.label.replace('\n', "\r\n");
             let label_styled = if is_selected {
-                opt.label.clone().bold().to_string()
+                label_for_display.bold().to_string()
             } else {
-                opt.label.clone()
+                label_for_display
             };
 
             write!(w, "  {} {}\r\n", key_styled, label_styled)?;
@@ -187,7 +188,7 @@ impl InteractiveSelect {
     }
 
     /// Calculate the total number of terminal lines the menu will occupy,
-    /// accounting for line wrapping.
+    /// accounting for line wrapping and embedded newlines.
     fn calculate_total_lines(&self) -> usize {
         let term_width = terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
 
@@ -196,10 +197,9 @@ impl InteractiveSelect {
         // Prompt line
         total_lines += Self::lines_needed(&self.prompt, term_width);
 
-        // Option lines (each has "  [X] " prefix = 6 chars)
+        // Option lines (first line has "  [X] " prefix = 6 chars, continuation lines don't)
         for opt in &self.options {
-            let line_len = 6 + opt.label.len();
-            total_lines += (line_len + term_width - 1) / term_width; // ceiling division
+            total_lines += Self::lines_needed_with_prefix(&opt.label, term_width, 6);
         }
 
         // Blank line + help line
@@ -210,12 +210,46 @@ impl InteractiveSelect {
         total_lines
     }
 
-    /// Calculate how many terminal lines a string will occupy.
+    /// Calculate how many terminal lines a string will occupy,
+    /// accounting for embedded newlines and line wrapping.
     fn lines_needed(s: &str, term_width: usize) -> usize {
         if s.is_empty() || term_width == 0 {
             return 1;
         }
-        (s.len() + term_width - 1) / term_width // ceiling division
+        s.split('\n')
+            .map(|line| {
+                if line.is_empty() {
+                    1
+                } else {
+                    (line.len() + term_width - 1) / term_width // ceiling division
+                }
+            })
+            .sum()
+    }
+
+    /// Calculate lines needed for a string with a prefix on the first line only.
+    fn lines_needed_with_prefix(s: &str, term_width: usize, prefix_len: usize) -> usize {
+        if term_width == 0 {
+            return 1;
+        }
+        let mut lines: Vec<&str> = s.split('\n').collect();
+        if lines.is_empty() {
+            return 1;
+        }
+
+        let mut total = 0;
+
+        // First line includes prefix
+        let first_line = lines.remove(0);
+        let first_len = prefix_len + first_line.len();
+        total += if first_len == 0 { 1 } else { (first_len + term_width - 1) / term_width };
+
+        // Remaining lines have no prefix
+        for line in lines {
+            total += if line.is_empty() { 1 } else { (line.len() + term_width - 1) / term_width };
+        }
+
+        total
     }
 
     fn clear_menu(&self, w: &mut impl Write) -> io::Result<()> {
