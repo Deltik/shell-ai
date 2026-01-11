@@ -20,7 +20,7 @@ replace = "version = \"{{version}}\""
 
 [package]
 name = "shell-ai"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "AI-assisted shell commands: create shell commands from natural language, or have them explained"
 license = "MIT"
