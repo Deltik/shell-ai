@@ -185,7 +185,7 @@ They share the same configuration structure and support `temperature` and `max_t
 
 ```toml
 [openai]
-api_key = "sk-..."  # REQUIRED
+api_key = "sk-..."
 # api_base = "https://api.openai.com"  # change for compatible APIs
 # model = ""
 # max_tokens = ""
@@ -193,7 +193,7 @@ api_key = "sk-..."  # REQUIRED
 ```
 
 ```bash
-export OPENAI_API_KEY=sk-...  # REQUIRED
+export OPENAI_API_KEY=sk-...
 # export OPENAI_API_BASE=https://api.openai.com
 # export OPENAI_MODEL=
 # export OPENAI_MAX_TOKENS=
@@ -207,14 +207,14 @@ export OPENAI_API_KEY=sk-...  # REQUIRED
 
 ```toml
 [groq]
-api_key = "gsk_..."  # REQUIRED
+api_key = "gsk_..."
 # api_base = "https://api.groq.com/openai"
 # model = ""
 # max_tokens = ""
 ```
 
 ```bash
-export GROQ_API_KEY=gsk_...  # REQUIRED
+export GROQ_API_KEY=gsk_...
 # export GROQ_API_BASE=https://api.groq.com/openai
 # export GROQ_MODEL=
 # export GROQ_MAX_TOKENS=
@@ -245,14 +245,14 @@ export GROQ_API_KEY=gsk_...  # REQUIRED
 
 ```toml
 [mistral]
-api_key = "your-key"  # REQUIRED
+api_key = "your-key"
 # api_base = "https://api.mistral.ai"
 # model = ""
 # max_tokens = ""
 ```
 
 ```bash
-export MISTRAL_API_KEY=your-key  # REQUIRED
+export MISTRAL_API_KEY=your-key
 # export MISTRAL_API_BASE=https://api.mistral.ai
 # export MISTRAL_MODEL=
 # export MISTRAL_MAX_TOKENS=
@@ -298,14 +298,14 @@ Use the native Anthropic Messages API as an alternative to the OpenAI chat compl
 
 ```toml
 [anthropic]
-api_key = "sk-ant-..."  # REQUIRED
+api_key = "sk-ant-..."
 # api_base = "https://api.anthropic.com"
 # model = ""
 # max_tokens = ""
 ```
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...  # REQUIRED
+export ANTHROPIC_API_KEY=sk-ant-...
 # export ANTHROPIC_API_BASE=https://api.anthropic.com
 # export ANTHROPIC_MODEL=
 # export ANTHROPIC_MAX_TOKENS=

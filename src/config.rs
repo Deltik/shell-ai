@@ -442,9 +442,9 @@ impl ProviderMeta {
 /// Common provider fields shared across all providers.
 pub const COMMON_PROVIDER_FIELDS: &[CommonFieldMeta] = &[
     CommonFieldMeta::new("api_key", "API key for authentication")
-        .required()
         .sensitive(),
-    CommonFieldMeta::new("api_base", "API base URL"),
+    CommonFieldMeta::new("api_base", "API base URL")
+        .required(),
     CommonFieldMeta::new("model", "Model to use"),
     CommonFieldMeta::new("max_tokens", "Max tokens for AI completion"),
 ];
@@ -1135,7 +1135,7 @@ impl<'a> ValidatedConfig<'a> {
                     .unwrap_or_else(|| "https://api.anthropic.com".to_string());
                 Box::new(AnthropicBackend::new(
                     base,
-                    self.credentials.api_key.clone().unwrap_or_default(),
+                    self.credentials.api_key.clone(),
                     self.effective_model(),
                     max_tokens,
                 ))

@@ -18,8 +18,8 @@ const DEFAULT_MAX_TOKENS: u32 = 64000;
 pub struct AnthropicBackend {
     /// Base URL for the Anthropic API
     base_url: String,
-    /// API key for x-api-key header authentication
-    api_key: String,
+    /// API key for x-api-key header authentication (None = omit header)
+    api_key: Option<String>,
     /// Model identifier (e.g., "claude-sonnet-4-20250514")
     model: String,
     /// Maximum tokens in the response (required by Anthropic API)
@@ -28,7 +28,7 @@ pub struct AnthropicBackend {
 
 impl AnthropicBackend {
     /// Create a new Anthropic backend.
-    pub fn new(base_url: String, api_key: String, model: String, max_tokens: Option<u32>) -> Self {
+    pub fn new(base_url: String, api_key: Option<String>, model: String, max_tokens: Option<u32>) -> Self {
         Self {
             base_url,
             api_key,
@@ -74,10 +74,12 @@ impl Backend for AnthropicBackend {
         }
 
         // Anthropic uses x-api-key header, not Bearer token
-        let extra_headers = vec![
-            ("x-api-key", self.api_key.as_str()),
+        let mut extra_headers = vec![
             ("anthropic-version", ANTHROPIC_VERSION),
         ];
+        if let Some(ref key) = self.api_key {
+            extra_headers.push(("x-api-key", key.as_str()));
+        }
 
         // Use post_json_raw for detailed error handling
         let (status, body) = http::post_json_raw(&url, None, &extra_headers, &payload)

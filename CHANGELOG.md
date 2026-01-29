@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.5.4 (UNRELEASED)
 
+### Changed
+
+- **API keys are now optional** for OpenAI, Anthropic, Groq, and Mistral providers, so the `api_key` option may be left empty.
+
+  This allows using compatible APIs like Ollama that don't require authentication. API keys are still needed for the official provider APIs.
+
+  The API base URL (`api_base`) is what's actually required, although defaults are already present.
+
 ### Fixed
 
 - `Error: API error: Claude CLI failed with exit code 1` when using `provider = "claudecode"` and Claude Code is not configured in verbose mode. The `claude` command at the time of writing requires the `--verbose` option to be set when using the streaming output mode.
