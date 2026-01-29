@@ -1,16 +1,15 @@
 use std::io::{self, BufRead, IsTerminal, Write};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
 use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
+use crate::backend::{Backend, BackendError, CompletionRequest};
 use crate::config::{resolve_locale, AppConfig, Frontend, OutputFormat, ValidatedConfig};
 use crate::explain;
-use crate::http;
 use crate::progress::Progress;
-use crate::provider::ProviderConfig;
 use crate::ui::{self, InteractiveSelect, TextInput};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -404,15 +403,17 @@ async fn generate_suggestions(
 
     let prompt_string = prompt.to_string();
     let ctx_string = if ctx_enabled { ctx_buffer.to_string() } else { String::new() };
-    let prov = ProviderConfig::from_validated(validated);
     let locale = resolve_locale(config.locale.value.as_deref());
+
+    // Create backend once and share across parallel tasks
+    let backend: Arc<dyn Backend> = Arc::from(validated.create_backend());
 
     let tasks = stream::iter(0..count).map(|_| {
         let p = prompt_string.clone();
         let c = ctx_string.clone();
-        let prov = prov.clone();
         let loc = locale.clone();
-        async move { suggest_once(&prov, &p, &c, loc.as_deref()).await }
+        let backend = Arc::clone(&backend);
+        async move { suggest_once(backend, &p, &c, loc.as_deref()).await }
     });
 
     let mut results: Vec<Suggestion> = Vec::new();
@@ -450,7 +451,7 @@ async fn generate_suggestions(
 }
 
 async fn suggest_once(
-    provider: &ProviderConfig,
+    backend: Arc<dyn Backend>,
     prompt: &str,
     ctx_buffer: &str,
     locale: Option<&str>,
@@ -486,48 +487,40 @@ async fn suggest_once(
     let schema_value: serde_json::Value = serde_json::from_str(SUGGEST_SCHEMA)
         .context("invalid internal suggest JSON schema")?;
 
-    let mut payload = json!({
-        "model": provider.model,
-        "messages": [
-            { "role": "system", "content": system_message },
-            { "role": "user", "content": format!("Generate a shell command that satisfies this user request: {}", prompt) }
-        ],
-        "temperature": provider.temperature,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "shell_command_suggestion",
-                "strict": true,
-                "schema": schema_value
-            }
+    let user_message = format!("Generate a shell command that satisfies this user request: {}", prompt);
+
+    let request = CompletionRequest {
+        system_messages: vec![system_message],
+        user_message,
+        json_schema: Some(schema_value),
+        schema_name: "shell_command_suggestion".to_string(),
+    };
+
+    // Use spawn_blocking to run the synchronous backend.complete() on a thread pool
+    // This allows multiple requests to run in parallel
+    let response = tokio::task::spawn_blocking(move || {
+        backend.complete(&request)
+    })
+    .await
+    .map_err(|e| anyhow!("Task join error: {}", e))?
+    .map_err(|e| {
+        match e {
+            BackendError::ApiError(msg) => anyhow!("API error: {}", msg),
+            BackendError::NetworkError(msg) => anyhow!("Network error: {}", msg),
+            BackendError::ParseError(msg) => anyhow!("Parse error: {}", msg),
+            BackendError::RequestTooLarge(msg) => anyhow!("Request too large: {}", msg),
+            BackendError::Other(e) => e,
         }
-    });
+    })?;
 
-    // Add max_tokens if configured
-    if let Some(max_tokens) = provider.max_tokens {
-        payload["max_tokens"] = json!(max_tokens);
-    }
-
-    let url = provider.chat_completions_url();
-    let bearer_token = provider.api_key.as_deref();
-    let extra_headers = provider.extra_headers_ref();
-
-    let resp_json: serde_json::Value = http::post_json(&url, bearer_token, &extra_headers, &payload)?;
-
-    if let Some(msg) = http::extract_api_error(&resp_json) {
-        return Err(anyhow!("API error: {}", msg));
-    }
-
-    let content = http::extract_content_from_response(&resp_json)?;
-
-    let suggestion: Suggestion = serde_json::from_str(content).map_err(|e| {
+    let suggestion: Suggestion = serde_json::from_str(&response.content).map_err(|e| {
         // If parsing failed and response was truncated, give a helpful hint
-        if http::is_truncated(&resp_json) {
+        if response.is_truncated {
             anyhow!(
                 "Response truncated (max_tokens too low). Increase --max-tokens or SHAI_MAX_TOKENS."
             )
         } else {
-            anyhow!("Failed to parse JSON from model: {}\nReceived: {}", e, content)
+            anyhow!("Failed to parse JSON from model: {}\nReceived: {}", e, response.content)
         }
     })?;
 

@@ -67,7 +67,7 @@ ln -v -s shell-ai ~/.cargo/bin/shai
 - **Shell integration**: Tab completions, aliases, and Ctrl+G keybinding via `shell-ai integration generate`.
 - **Multilingual**: Describe tasks in any language the AI model understands. Responses adapt to your system locale.
 - **Explain from `man`**: `shell-ai explain` includes grounding from man pages, not just AI knowledge.
-- **Multiple providers**: OpenAI, Azure OpenAI, Groq, Ollama (local), and Mistral.
+- **Multiple providers**: OpenAI, Azure OpenAI, Groq, Ollama (local), Mistral, Anthropic Claude, and Claude Code CLI.
 - **Interactive workflow**: Select a suggestion, then explain it, execute it, copy it, or revise it.
 - **Vim-style navigation**: j/k keys, number shortcuts (1-9), arrow keys.
 - **Scriptable**: `--frontend=noninteractive` and `--output-format=json` for automation. Pipe commands to `shell-ai explain` via stdin.
@@ -144,81 +144,121 @@ model = "gpt-4o"
 Set the provider in your config file (`~/.config/shell-ai/config.toml` on Linux, `~/Library/Application Support/shell-ai/config.toml` on macOS, `%APPDATA%\shell-ai\config.toml` on Windows). The provider-specific settings go in a section named after the provider.
 
 ```toml
-provider = "openai"  # or: groq, azure, ollama, mistral
+provider = "openai"  # or: anthropic, claudecode
 ```
 
 Shell-AI may alternatively be configured by environment variables, which override the config file:
 
-<details>
-<summary>Environment variables</summary>
-
 ```bash
-export SHAI_API_PROVIDER=openai  # or: groq, azure, ollama, mistral
+export SHAI_API_PROVIDER=openai  # or: anthropic, claudecode
 ```
 
-</details>
+> [!TIP]
+> Run `shell-ai config schema` to see all available settings and their defaults.
 
-#### OpenAI
+#### OpenAI-Compatible Providers
 
-Works with OpenAI and any OpenAI-compatible API (e.g., DeepSeek).
+The providers `openai`, `groq`, `ollama`, and `mistral` all use the OpenAI chat completions API format.
+They share the same configuration structure and support `temperature` and `max_tokens` settings.
+
+| Provider  | Environment Variables                                                                           |
+|-----------|-------------------------------------------------------------------------------------------------|
+| `openai`  | `OPENAI_API_KEY`, `OPENAI_API_BASE`, `OPENAI_MODEL`, `OPENAI_MAX_TOKENS`, `OPENAI_ORGANIZATION` |
+| `groq`    | `GROQ_API_BASE`, `GROQ_API_KEY`, `GROQ_MODEL`, `GROQ_MAX_TOKENS`                                |
+| `ollama`  | `OLLAMA_API_BASE`, `OLLAMA_MODEL`, `OLLAMA_MAX_TOKENS`                                          |
+| `mistral` | `MISTRAL_API_KEY`, `MISTRAL_API_BASE`, `MISTRAL_MODEL`, `MISTRAL_MAX_TOKENS`                    |
+
+> [!NOTE]
+> `provider = "openai"` works with any OpenAI-compatible API.
+> 
+> The main differences from other OpenAI-compatible providers are the default API base URLs and models.
 
 <details>
-<summary>TOML config</summary>
+<summary>OpenAI / Any OpenAI-compatible API</summary>
 
 ```toml
 [openai]
 api_key = "sk-..."  # REQUIRED
 # api_base = "https://api.openai.com"  # change for compatible APIs
-# model = "gpt-5"
+# model = ""
 # max_tokens = ""
 # organization = ""  # for multi-org accounts
 ```
 
-</details>
-
-<details>
-<summary>Environment variables</summary>
-
 ```bash
 export OPENAI_API_KEY=sk-...  # REQUIRED
 # export OPENAI_API_BASE=https://api.openai.com
-# export OPENAI_MODEL=gpt-5
+# export OPENAI_MODEL=
 # export OPENAI_MAX_TOKENS=
 # export OPENAI_ORGANIZATION=
 ```
 
 </details>
 
-#### Groq
-
 <details>
-<summary>TOML config</summary>
+<summary>Groq</summary>
 
 ```toml
 [groq]
 api_key = "gsk_..."  # REQUIRED
 # api_base = "https://api.groq.com/openai"
-# model = "openai/gpt-oss-120b"
+# model = ""
 # max_tokens = ""
+```
+
+```bash
+export GROQ_API_KEY=gsk_...  # REQUIRED
+# export GROQ_API_BASE=https://api.groq.com/openai
+# export GROQ_MODEL=
+# export GROQ_MAX_TOKENS=
 ```
 
 </details>
 
 <details>
-<summary>Environment variables</summary>
+<summary>Ollama</summary>
+
+```toml
+[ollama]
+# api_base = "http://localhost:11434"
+# model = ""
+# max_tokens = ""
+```
 
 ```bash
-export GROQ_API_KEY=gsk_...  # REQUIRED
-# export GROQ_MODEL=openai/gpt-oss-120b
-# export GROQ_MAX_TOKENS=
+# export OLLAMA_API_BASE=http://localhost:11434
+# export OLLAMA_MODEL=
+# export OLLAMA_MAX_TOKENS=
+```
+
+</details>
+
+<details>
+<summary>Mistral</summary>
+
+```toml
+[mistral]
+api_key = "your-key"  # REQUIRED
+# api_base = "https://api.mistral.ai"
+# model = ""
+# max_tokens = ""
+```
+
+```bash
+export MISTRAL_API_KEY=your-key  # REQUIRED
+# export MISTRAL_API_BASE=https://api.mistral.ai
+# export MISTRAL_MODEL=
+# export MISTRAL_MAX_TOKENS=
 ```
 
 </details>
 
 #### Azure OpenAI
 
+Azure OpenAI uses a different URL structure with deployment names instead of model selection.
+
 <details>
-<summary>TOML config</summary>
+<summary>Configuration</summary>
 
 ```toml
 [azure]
@@ -228,11 +268,6 @@ deployment_name = "your-deployment"  # REQUIRED
 # api_version = "2023-05-15"
 # max_tokens = ""
 ```
-
-</details>
-
-<details>
-<summary>Environment variables</summary>
 
 ```bash
 export AZURE_API_KEY=your-key  # REQUIRED
@@ -244,57 +279,53 @@ export AZURE_DEPLOYMENT_NAME=your-deployment  # REQUIRED
 
 </details>
 
-#### Ollama
+#### Anthropic
 
-No API key required for local Ollama.
+Use the native Anthropic Messages API as an alternative to the OpenAI chat completions API.
+
+> [!NOTE]
+> `provider = "anthropic"` works with any Anthropic-compatible API, like [Ollama v0.14.0](https://github.com/ollama/ollama/releases/tag/v0.14.0).
 
 <details>
-<summary>TOML config</summary>
+<summary>Configuration</summary>
 
 ```toml
-[ollama]
-# api_base = "http://localhost:11434"
-# model = "gpt-oss:120b-cloud"
+[anthropic]
+api_key = "sk-ant-..."  # REQUIRED
+# api_base = "https://api.anthropic.com"
+# model = ""
 # max_tokens = ""
 ```
 
-</details>
-
-<details>
-<summary>Environment variables</summary>
-
 ```bash
-# export OLLAMA_API_BASE=http://localhost:11434
-# export OLLAMA_MODEL=gpt-oss:120b-cloud
-# export OLLAMA_MAX_TOKENS=
+export ANTHROPIC_API_KEY=sk-ant-...  # REQUIRED
+# export ANTHROPIC_API_BASE=https://api.anthropic.com
+# export ANTHROPIC_MODEL=
+# export ANTHROPIC_MAX_TOKENS=
 ```
 
 </details>
 
-#### Mistral
+#### Claude Code
+
+Uses the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) in non-interactive mode.
+No API key or login configuration needed; Claude Code manages its own authentication.
 
 <details>
-<summary>TOML config</summary>
+<summary>Configuration</summary>
 
 ```toml
-[mistral]
-api_key = "your-key"  # REQUIRED
-# api_base = "https://api.mistral.ai"
-# model = "codestral-2508"
-# max_tokens = ""
+[claudecode]
+# cli_path = "claude"  # path to claude executable
+# model = ""           # e.g., haiku, sonnet, opus
 ```
-
-</details>
-
-<details>
-<summary>Environment variables</summary>
 
 ```bash
-export MISTRAL_API_KEY=your-key  # REQUIRED
-# export MISTRAL_API_BASE=https://api.mistral.ai
-# export MISTRAL_MODEL=codestral-2508
-# export MISTRAL_MAX_TOKENS=
+# export CLAUDE_CODE_CLI_PATH=claude
+# export CLAUDE_CODE_MODEL=
 ```
+
+**Requirements:** Claude Code CLI installed and authenticated (`claude` command available in PATH, or specify full path via `cli_path`).
 
 </details>
 

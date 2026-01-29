@@ -2,13 +2,13 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::Path;
 
+mod backend;
 mod config;
 mod explain;
 mod http;
 mod integration;
 mod logger;
 mod progress;
-mod provider;
 mod suggest;
 mod ui;
 
@@ -17,7 +17,7 @@ use crate::config::{AppConfig, CliOverrides, DebugLevel, OutputFormat};
 /// Global options available on all commands.
 #[derive(Parser, Debug, Clone, Default)]
 pub struct GlobalOptions {
-    /// Provider override (openai, azure, groq, mistral, ollama)
+    /// Provider override (openai, azure, groq, mistral, ollama, anthropic, claudecode)
     #[arg(long = "provider", global = true)]
     pub provider: Option<String>,
 

@@ -1,15 +1,13 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use colored::Colorize;
 use is_terminal::IsTerminal;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::process::{Command, Stdio};
-use serde_json::json;
 
+use crate::backend::{BackendError, CompletionRequest};
 use crate::config::{resolve_locale, OutputFormat, ValidatedConfig};
-use crate::http;
 use crate::progress::Progress;
-use crate::provider::ProviderConfig;
 
 /// A man page reference with metadata for sorting.
 #[derive(Debug, Clone)]
@@ -241,6 +239,8 @@ struct ExplainResult {
 /// Build the JSON schema for explain output.
 /// When `with_citations` is true, includes citation and citation_confidence fields.
 fn build_explain_schema(with_citations: bool) -> serde_json::Value {
+    use serde_json::json;
+
     let mut properties = serde_json::Map::new();
     let mut required = vec!["segment", "prefix", "suffix", "children"];
 
@@ -416,11 +416,8 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
         bail!("Command to explain is empty");
     }
 
-    // Use the shared provider configuration
-    let provider = ProviderConfig::from_validated(validated);
-    let url = provider.chat_completions_url();
-    let bearer_token = provider.api_key.as_deref();
-    let extra_headers = provider.extra_headers_ref();
+    // Create backend for API calls
+    let backend = validated.create_backend();
 
     // Create progress indicator
     let progress = Progress::new("Gathering documentation...");
@@ -441,7 +438,7 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
     // Resolve the effective locale for AI responses
     let locale = resolve_locale(config.locale.value.as_deref());
 
-    // Retry loop: on 413, drop the shortest man page reference and retry
+    // Retry loop: on RequestTooLarge, drop the shortest man page reference and retry
     loop {
         // Determine if we have documentation to cite
         let with_citations = !references.is_empty();
@@ -450,144 +447,90 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
         let schema_value = build_explain_schema(with_citations);
         let system_prompt = build_system_prompt(with_citations, locale.as_deref());
 
-        // Build messages array:
-        // 1. System message with instructions
-        // 2. System messages with man page documentation (if any)
-        // 3. User message with just the command to explain
-        let mut messages: Vec<serde_json::Value> = Vec::new();
-
-        // Instructions system message
-        messages.push(json!({"role": "system", "content": system_prompt}));
-
-        // Man page documentation system messages
+        // Build system messages: instructions first, then man page documentation
+        let mut system_messages = vec![system_prompt];
         for r in &references {
-            messages.push(json!({"role": "system", "content": r.content}));
+            system_messages.push(r.content.clone());
         }
 
-        // User message is just the command
-        messages.push(json!({"role": "user", "content": command_to_explain}));
-
-        let mut payload = json!({
-            "model": provider.model,
-            "messages": messages,
-            "temperature": provider.temperature,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "command_explanation",
-                    "strict": true,
-                    "schema": schema_value
-                }
-            }
-        });
-
-        // Add max_tokens if configured
-        if let Some(max_tokens) = provider.max_tokens {
-            payload["max_tokens"] = json!(max_tokens);
-        }
-
-        let payload_str = serde_json::to_string(&payload)
-            .unwrap_or_else(|e| format!("<serialization error: {}>", e));
-        log::debug!("Sending request to: {}", url);
-        log::debug!("Payload size: {} chars", payload_str.len());
         log::debug!("System messages: {} (1 instructions + {} man pages), User messages: 1",
-                  1 + references.len(), references.len());
+                  system_messages.len(), references.len());
 
         // Update progress for API call
         if let Some(ref p) = progress {
             p.set_message("Waiting for AI response...");
         }
 
-        let (status, body) = http::post_json_raw(&url, bearer_token, &extra_headers, &payload)?;
+        let request = CompletionRequest {
+            system_messages,
+            user_message: command_to_explain.to_string(),
+            json_schema: Some(schema_value),
+            schema_name: "command_explanation".to_string(),
+        };
 
-        // Handle 413 Request Entity Too Large
-        if status == 413 {
-            log::debug!("HTTP 413 response body: {}", body);
+        match backend.complete(&request) {
+            Ok(response) => {
+                log::trace!("Raw model response ({} chars):\n{}", response.content.len(), response.content);
 
-            if references.is_empty() {
+                let explanation: ExplainResult = serde_json::from_str(&response.content)
+                    .context("failed to parse explanation JSON from model")?;
+
+                // Clear progress before output
+                if let Some(ref p) = progress {
+                    p.finish_and_clear();
+                }
+
+                // Render output based on output format from config
+                match config.output_format.value {
+                    OutputFormat::Json => {
+                        println!("{}", serde_json::to_string_pretty(&explanation)?);
+                    }
+                    OutputFormat::Human => {
+                        println!();
+                        println!("{}", "Explanation:".white().bold());
+                        println!();
+                        println!("  {}", explanation.synopsis.dimmed());
+                        println!();
+                        for node in &explanation.explanations {
+                            render_node(command_to_explain, node, 1);
+                        }
+                        println!();
+                    }
+                }
+
+                return Ok(());
+            }
+            Err(BackendError::RequestTooLarge(msg)) => {
+                log::debug!("Request too large: {}", msg);
+
+                if references.is_empty() {
+                    // Clear progress before error
+                    if let Some(ref p) = progress {
+                        p.finish_and_clear();
+                    }
+                    // No more references to drop, fail with the error
+                    bail!("Request too large: {}", msg);
+                }
+
+                // Drop the shortest reference (first in sorted list) and retry
+                let dropped = references.remove(0);
+                log::info!(
+                    "Context too large, dropping man page for '{}' and retrying...",
+                    dropped.command
+                );
+                if let Some(ref p) = progress {
+                    p.set_message(&format!("Retrying without '{}'...", dropped.command));
+                }
+                continue;
+            }
+            Err(e) => {
                 // Clear progress before error
                 if let Some(ref p) = progress {
                     p.finish_and_clear();
                 }
-                // No more references to drop, fail with the error
-                bail!(
-                    "Request too large (HTTP 413): {}",
-                    if body.is_empty() {
-                        "context length exceeded".to_string()
-                    } else {
-                        body
-                    }
-                );
-            }
-
-            // Drop the shortest reference (first in sorted list) and retry
-            let dropped = references.remove(0);
-            log::info!(
-                "Context too large, dropping man page for '{}' and retrying...",
-                dropped.command
-            );
-            if let Some(ref p) = progress {
-                p.set_message(&format!("Retrying without '{}'...", dropped.command));
-            }
-            continue;
-        }
-
-        // Handle other errors
-        if status < 200 || status >= 300 {
-            // Clear progress before error
-            if let Some(ref p) = progress {
-                p.finish_and_clear();
-            }
-            bail!(
-                "HTTP {} error: {}",
-                status,
-                if body.is_empty() {
-                    "Unknown error".to_string()
-                } else {
-                    body
-                }
-            );
-        }
-
-        // Parse response
-        let resp_json: serde_json::Value = serde_json::from_str(&body)
-            .context("failed to parse API response as JSON")?;
-
-        if let Some(msg) = http::extract_api_error(&resp_json) {
-            bail!("API error: {}", msg);
-        }
-
-        let content = http::extract_content_from_response(&resp_json)?;
-
-        log::trace!("Raw model response ({} chars):\n{}", content.len(), content);
-
-        let explanation: ExplainResult = serde_json::from_str(content)
-            .context("failed to parse explanation JSON from model")?;
-
-        // Clear progress before output
-        if let Some(ref p) = progress {
-            p.finish_and_clear();
-        }
-
-        // Render output based on output format from config
-        match config.output_format.value {
-            OutputFormat::Json => {
-                println!("{}", serde_json::to_string_pretty(&explanation)?);
-            }
-            OutputFormat::Human => {
-                println!();
-                println!("{}", "Explanation:".white().bold());
-                println!();
-                println!("  {}", explanation.synopsis.dimmed());
-                println!();
-                for node in &explanation.explanations {
-                    render_node(command_to_explain, node, 1);
-                }
-                println!();
+                return Err(anyhow!("{}", e));
             }
         }
-
-        return Ok(());
     }
 }
 

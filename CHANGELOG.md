@@ -7,6 +7,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.5.3 (UNRELEASED)
+
+### Added
+
+- **Anthropic Claude API provider** (`provider = "anthropic"`)
+
+  Native support for the Anthropic Messages API. Set `ANTHROPIC_API_KEY` or configure under `[anthropic]`.
+
+- **Claude Code CLI provider** (`provider = "claudecode"`)
+
+  Use [Claude Code](https://docs.anthropic.com/en/docs/claude-code) as a backend. No API key needed; Claude Code manages its own auth. Optional settings under `[claudecode]`.
+
+### Changed
+
+- **Backend abstraction layer**
+
+  Internal refactor: providers now implement a `Backend` trait, separating HTTP-based providers from subprocess-based ones. No user-facing changes.
+
 ## v0.5.2 (2026-01-11)
 
 ### Added

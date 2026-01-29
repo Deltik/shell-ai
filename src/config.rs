@@ -116,6 +116,10 @@ pub enum Provider {
     Ollama,
     #[serde(alias = "mistral")]
     Mistral,
+    #[serde(alias = "anthropic")]
+    Anthropic,
+    #[serde(alias = "claudecode", alias = "claude-code", alias = "claude_code")]
+    ClaudeCode,
 }
 
 /// Debug/logging level.
@@ -198,6 +202,16 @@ pub mod env {
     pub const MISTRAL_API_BASE: &str = "MISTRAL_API_BASE";
     pub const MISTRAL_MODEL: &str = "MISTRAL_MODEL";
     pub const MISTRAL_MAX_TOKENS: &str = "MISTRAL_MAX_TOKENS";
+
+    // Anthropic provider
+    pub const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
+    pub const ANTHROPIC_API_BASE: &str = "ANTHROPIC_API_BASE";
+    pub const ANTHROPIC_MODEL: &str = "ANTHROPIC_MODEL";
+    pub const ANTHROPIC_MAX_TOKENS: &str = "ANTHROPIC_MAX_TOKENS";
+
+    // Claude Code provider (subprocess-based)
+    pub const CLAUDE_CODE_CLI_PATH: &str = "CLAUDE_CODE_CLI_PATH";
+    pub const CLAUDE_CODE_MODEL: &str = "CLAUDE_CODE_MODEL";
 }
 
 // ============================================================================
@@ -559,6 +573,36 @@ pub const PROVIDER_METADATA: &[ProviderMeta] = &[
         extra_fields: &[],
         skip_common: &[],
     },
+    ProviderMeta {
+        name: "anthropic",
+        display_name: "Anthropic",
+        description: "Anthropic Claude API (native Messages API)",
+        field_overrides: &[
+            FieldOverride { name: "api_key", env_var: Some(env::ANTHROPIC_API_KEY), default: None, required: None },
+            FieldOverride { name: "api_base", env_var: Some(env::ANTHROPIC_API_BASE), default: Some("https://api.anthropic.com"), required: None },
+            FieldOverride { name: "model", env_var: Some(env::ANTHROPIC_MODEL), default: Some("claude-sonnet-4-5"), required: None },
+            FieldOverride { name: "max_tokens", env_var: Some(env::ANTHROPIC_MAX_TOKENS), default: None, required: None },
+        ],
+        extra_fields: &[],
+        skip_common: &[],
+    },
+    ProviderMeta {
+        name: "claudecode",
+        display_name: "Claude Code",
+        description: "Claude Code CLI (subprocess, non-interactive mode)",
+        field_overrides: &[
+            FieldOverride { name: "api_key", env_var: None, default: None, required: Some(false) },
+            FieldOverride { name: "api_base", env_var: None, default: None, required: Some(false) },
+            FieldOverride { name: "model", env_var: Some(env::CLAUDE_CODE_MODEL), default: None, required: None },
+        ],
+        extra_fields: &[
+            FieldMeta::new("cli_path", "Path to claude CLI executable")
+                .env(env::CLAUDE_CODE_CLI_PATH)
+                .section(Section::ProviderSpecific)
+                .default("claude"),
+        ],
+        skip_common: &["api_key", "api_base", "max_tokens"], // Claude Code CLI doesn't use HTTP or support max_tokens
+    },
 ];
 
 impl Provider {
@@ -878,6 +922,8 @@ pub struct ProviderCredentials {
     // Azure-specific
     pub deployment_name: Option<String>,
     pub api_version: Option<String>,
+    // Claude Code-specific
+    pub cli_path: Option<String>,
 }
 
 impl ProviderCredentials {
@@ -891,6 +937,7 @@ impl ProviderCredentials {
             "max_tokens" => self.max_tokens.map(|t| t.to_string()),
             "deployment_name" => self.deployment_name.clone(),
             "api_version" => self.api_version.clone(),
+            "cli_path" => self.cli_path.clone(),
             _ => None,
         }
     }
@@ -928,6 +975,8 @@ pub struct TomlConfig {
     pub azure: Option<ProviderCredentials>,
     pub ollama: Option<ProviderCredentials>,
     pub mistral: Option<ProviderCredentials>,
+    pub anthropic: Option<ProviderCredentials>,
+    pub claudecode: Option<ProviderCredentials>,
 }
 
 /// Unified application configuration with source tracking.
@@ -990,6 +1039,117 @@ impl<'a> ValidatedConfig<'a> {
 
     pub fn effective_max_tokens(&self) -> Option<u32> {
         self.config.effective_max_tokens()
+    }
+
+    /// Create the appropriate backend for this validated configuration..
+    pub fn create_backend(&self) -> Box<dyn crate::backend::Backend> {
+        use crate::backend::{AnthropicBackend, ClaudeCodeBackend, OpenAiBackend};
+
+        let temperature = self.temperature();
+        let max_tokens = self.effective_max_tokens();
+
+        match self.provider {
+            Provider::OpenAI => {
+                let base = self.credentials.api_base.clone()
+                    .unwrap_or_else(|| "https://api.openai.com".to_string());
+                let mut extra_headers = Vec::new();
+                if let Some(ref org) = self.credentials.organization {
+                    extra_headers.push(("OpenAI-Organization".to_string(), org.clone()));
+                }
+                let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+                Box::new(OpenAiBackend::new(
+                    url,
+                    self.effective_model(),
+                    self.credentials.api_key.clone(),
+                    extra_headers,
+                    temperature,
+                    max_tokens,
+                ))
+            }
+            Provider::Azure => {
+                let base = self.credentials.api_base.clone().unwrap_or_default();
+                let deployment = self.credentials.deployment_name.clone().unwrap_or_default();
+                let api_version = self.credentials.api_version.clone()
+                    .unwrap_or_else(|| "2023-05-15".to_string());
+                let api_key = self.credentials.api_key.clone()
+                    .or_else(|| {
+                        self.config
+                            .get_credentials_for(&Provider::OpenAI)
+                            .and_then(|c| c.api_key.clone())
+                    });
+                let url = format!(
+                    "{}/openai/deployments/{}/chat/completions?api-version={}",
+                    base.trim_end_matches('/'), deployment, api_version
+                );
+                let header_val = api_key.clone().unwrap_or_default();
+                Box::new(OpenAiBackend::new(
+                    url,
+                    String::new(), // Azure uses deployment name, not model
+                    api_key,
+                    vec![("api-key".to_string(), header_val)],
+                    temperature,
+                    max_tokens,
+                ))
+            }
+            Provider::Ollama => {
+                let base = self.credentials.api_base.clone()
+                    .unwrap_or_else(|| "http://localhost:11434".to_string());
+                let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+                Box::new(OpenAiBackend::new(
+                    url,
+                    self.effective_model(),
+                    Some("ollama".to_string()), // Ollama requires a dummy key
+                    vec![],
+                    temperature,
+                    max_tokens,
+                ))
+            }
+            Provider::Mistral => {
+                let base = self.credentials.api_base.clone()
+                    .unwrap_or_else(|| "https://api.mistral.ai".to_string());
+                let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+                Box::new(OpenAiBackend::new(
+                    url,
+                    self.effective_model(),
+                    self.credentials.api_key.clone(),
+                    vec![],
+                    temperature,
+                    max_tokens,
+                ))
+            }
+            Provider::Groq => {
+                let base = self.credentials.api_base.clone()
+                    .unwrap_or_else(|| "https://api.groq.com/openai".to_string());
+                let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+                Box::new(OpenAiBackend::new(
+                    url,
+                    self.effective_model(),
+                    self.credentials.api_key.clone(),
+                    vec![],
+                    temperature,
+                    max_tokens,
+                ))
+            }
+            Provider::Anthropic => {
+                let base = self.credentials.api_base.clone()
+                    .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+                Box::new(AnthropicBackend::new(
+                    base,
+                    self.credentials.api_key.clone().unwrap_or_default(),
+                    self.effective_model(),
+                    max_tokens,
+                ))
+            }
+            Provider::ClaudeCode => {
+                let cli_path = self.credentials.cli_path.clone()
+                    .unwrap_or_else(|| "claude".to_string());
+                let model = {
+                    let m = self.effective_model();
+                    if m.is_empty() { None } else { Some(m) }
+                };
+                Box::new(ClaudeCodeBackend::new(cli_path, model))
+            }
+        }
     }
 }
 
@@ -1086,6 +1246,12 @@ impl AppConfig {
         }
         if let Some(creds) = parsed.mistral {
             providers.insert(Provider::Mistral, creds);
+        }
+        if let Some(creds) = parsed.anthropic {
+            providers.insert(Provider::Anthropic, creds);
+        }
+        if let Some(creds) = parsed.claudecode {
+            providers.insert(Provider::ClaudeCode, creds);
         }
 
         // Ensure all providers have at least default credentials

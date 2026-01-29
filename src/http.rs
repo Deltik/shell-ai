@@ -3,12 +3,6 @@ use serde_json::Value;
 use std::time::Duration;
 use ureq::Proxy;
 
-/// Maximum number of retry attempts for transient errors
-const MAX_RETRIES: u32 = 3;
-
-/// Initial backoff delay in milliseconds
-const INITIAL_BACKOFF_MS: u64 = 1000;
-
 /// Request timeout in seconds
 const TIMEOUT_SECS: u64 = 60;
 
@@ -16,10 +10,10 @@ const TIMEOUT_SECS: u64 = 60;
 ///
 /// Respects standard proxy environment variables: HTTP_PROXY, HTTPS_PROXY, NO_PROXY
 /// (and lowercase variants http_proxy, https_proxy, no_proxy).
-fn create_agent(http_status_as_error: bool) -> ureq::Agent {
+fn create_agent() -> ureq::Agent {
     let mut config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(TIMEOUT_SECS)))
-        .http_status_as_error(http_status_as_error);
+        .http_status_as_error(false); // We handle status codes ourselves
 
     // Try to get proxy from environment variables
     if let Some(proxy) = Proxy::try_from_env() {
@@ -30,93 +24,7 @@ fn create_agent(http_status_as_error: bool) -> ureq::Agent {
     config.build().into()
 }
 
-/// Get a human-friendly description for HTTP status codes
-fn status_description(status: u16) -> &'static str {
-    match status {
-        401 => "Unauthorized - check your API key",
-        403 => "Forbidden - check your API key permissions",
-        404 => "Not found - check the API endpoint URL",
-        429 => "Rate limited - too many requests",
-        500..=599 => "Server error - the API is having issues",
-        _ => "HTTP error",
-    }
-}
-
-/// Send a POST request with JSON body and return parsed JSON response.
-/// Includes exponential backoff retry for 429 and 5xx errors.
-/// Respects HTTP_PROXY/HTTPS_PROXY environment variables.
-pub fn post_json(
-    url: &str,
-    bearer_token: Option<&str>,
-    extra_headers: &[(&str, &str)],
-    body: &Value,
-) -> Result<Value> {
-    let agent = create_agent(true);
-
-    let mut backoff_ms = INITIAL_BACKOFF_MS;
-
-    for attempt in 0..=MAX_RETRIES {
-        let mut request = agent.post(url);
-
-        if let Some(token) = bearer_token {
-            request = request.header("Authorization", &format!("Bearer {}", token));
-        }
-
-        for (k, v) in extra_headers {
-            request = request.header(*k, *v);
-        }
-
-        return match request.send_json(body) {
-            Ok(response) => {
-                let body_str = response.into_body().read_to_string()?;
-                let json: Value = serde_json::from_str(&body_str)
-                    .map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
-                Ok(json)
-            }
-            Err(ureq::Error::StatusCode(status)) => {
-                // Rate limit (429) or server error (5xx) - retry with backoff
-                if status == 429 || (500..600).contains(&status) {
-                    if attempt < MAX_RETRIES {
-                        log::warn!(
-                            "{} (HTTP {}) - attempt {}/{}, retrying in {}ms...",
-                            status_description(status),
-                            status,
-                            attempt + 1,
-                            MAX_RETRIES + 1,
-                            backoff_ms
-                        );
-                        std::thread::sleep(Duration::from_millis(backoff_ms));
-                        backoff_ms *= 2;
-                        continue;
-                    }
-                }
-
-                Err(anyhow!("HTTP {}: {}", status, status_description(status)))
-            }
-            Err(e) => {
-                // Network error - retry
-                if attempt < MAX_RETRIES {
-                    log::warn!(
-                        "Network error (attempt {}/{}): {}, retrying in {}ms...",
-                        attempt + 1,
-                        MAX_RETRIES + 1,
-                        e,
-                        backoff_ms
-                    );
-                    std::thread::sleep(Duration::from_millis(backoff_ms));
-                    backoff_ms *= 2;
-                    continue;
-                }
-                Err(anyhow!("Network error: {}", e))
-            }
-        }
-    }
-
-    Err(anyhow!("Max retries exceeded"))
-}
-
 /// Send a POST request with JSON body and return the response status and body.
-/// Does NOT retry - caller handles retry logic.
 /// Respects HTTP_PROXY/HTTPS_PROXY environment variables.
 /// Returns (status_code, body_text) on any response, or error on network failure.
 pub fn post_json_raw(
@@ -125,8 +33,7 @@ pub fn post_json_raw(
     extra_headers: &[(&str, &str)],
     body: &Value,
 ) -> Result<(u16, String)> {
-    // Use create_agent with http_status_as_error=false to get response body for all status codes
-    let agent = create_agent(false);
+    let agent = create_agent();
 
     let mut request = agent.post(url);
 
