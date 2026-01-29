@@ -38,7 +38,8 @@ For guided configuration, run `shell-ai config init` to generate a documented co
 
 ## Installation
 
-_After installing, [configure](#configuration) your AI provider. Then, consider adding [shell integrations](#shell-integration) for optional workflow enhancements._
+> [!TIP]
+> After installing, [configure](#configuration) your AI provider. Then, consider adding [shell integrations](#shell-integration) for optional workflow enhancements.
 
 ### From GitHub Releases
 
@@ -63,15 +64,15 @@ ln -v -s shell-ai ~/.cargo/bin/shai
 
 ## Features
 
-- **Single binary**: No Python, no runtime dependencies. Just one executable.
-- **Shell integration**: Tab completions, aliases, and Ctrl+G keybinding via `shell-ai integration generate`.
-- **Multilingual**: Describe tasks in any language the AI model understands. Responses adapt to your system locale.
-- **Explain from `man`**: `shell-ai explain` includes grounding from man pages, not just AI knowledge.
-- **Multiple providers**: OpenAI, Azure OpenAI, Groq, Ollama (local), Mistral, Anthropic Claude, and Claude Code CLI.
-- **Interactive workflow**: Select a suggestion, then explain it, execute it, copy it, or revise it.
-- **Vim-style navigation**: j/k keys, number shortcuts (1-9), arrow keys.
-- **Scriptable**: `--frontend=noninteractive` and `--output-format=json` for automation. Pipe commands to `shell-ai explain` via stdin.
-- **Configuration introspection**: `shell-ai config` shows current settings and their sources.
+- **Single binary:** No Python, no runtime dependencies. Just one executable.
+- **Shell integration:** Tab completions, aliases, and Ctrl+G keybinding via `shell-ai integration generate`.
+- **Multilingual:** Describe tasks in any language the AI model understands. Responses adapt to your system locale.
+- **Explain from `man`:** `shell-ai explain` includes grounding from man pages, not just AI knowledge.
+- **Multiple providers:** OpenAI (including: Groq, Ollama, Mistral), Azure OpenAI, Anthropic (including: Claude API, Ollama v0.14.0+), and Claude Code CLI.
+- **Interactive workflow:** Select a suggestion, then explain it, execute it, copy it, or revise it.
+- **Vim-style navigation:** j/k keys, number shortcuts (1-9), arrow keys.
+- **Scriptable:** `--frontend=noninteractive` and `--output-format=json` for automation. Pipe commands to `shell-ai explain` via stdin.
+- **Configuration introspection:** `shell-ai config` shows current settings and their sources.
 
 Run `shell-ai --help` for all options, or `shell-ai config schema` for the full configuration reference.
 
@@ -141,7 +142,13 @@ model = "gpt-4o"
 
 ### Providers
 
-Set the provider in your config file (`~/.config/shell-ai/config.toml` on Linux, `~/Library/Application Support/shell-ai/config.toml` on macOS, `%APPDATA%\shell-ai\config.toml` on Windows). The provider-specific settings go in a section named after the provider.
+Set the provider in your config file:
+
+- **Linux:** `~/.config/shell-ai/config.toml`
+- **macOS:** `~/Library/Application Support/shell-ai/config.toml`
+- **Windows:** `%APPDATA%\shell-ai\config.toml`
+
+The provider-specific settings go in a section named after the provider.
 
 ```toml
 provider = "openai"  # or: anthropic, claudecode
