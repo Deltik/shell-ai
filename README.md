@@ -97,9 +97,9 @@ Run `shell-ai --help` for all options, or `shell-ai config schema` for the full 
 
 ### Challenging Tasks
 
-| Suggest                                                                           | Explain                                                                             |
-|-----------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
-| [![shell-ai suggest](docs/images/suggest-perl.gif)](docs/images/suggest-perl.gif) | [![shell-ai explain](docs/images/explain-rsync.png)](docs/images/explain-rsync.png) |
+| Suggest                                                                                                                                                                                    | Explain                                                                                                                                 |
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| [![shell-ai suggest 'perl: Animate 5 seconds of an indeterminate progress bar in the style of a six-color ANSI rainbow wave'](docs/images/suggest-perl.gif)](docs/images/suggest-perl.gif) | [![shell-ai explain -- rsync --delete-delay --delay-updates -avyyHXShPs](docs/images/explain-rsync.png)](docs/images/explain-rsync.png) |
 
 ### JSON Output for Scripting
 
