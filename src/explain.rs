@@ -4,9 +4,12 @@ use is_terminal::IsTerminal;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::time::Duration;
 
-use crate::backend::{BackendError, CompletionRequest};
+use crate::backend::{Backend, BackendError, CompletionRequest, StreamCallback, StreamEvent};
 use crate::config::{resolve_locale, OutputFormat, ValidatedConfig};
+use crate::preview::StreamingPreview;
 use crate::progress::Progress;
 
 /// A man page reference with metadata for sorting.
@@ -416,10 +419,10 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
         bail!("Command to explain is empty");
     }
 
-    // Create backend for API calls
-    let backend = validated.create_backend();
+    // Create backend for API calls (Arc for sharing across threads)
+    let backend: Arc<dyn Backend> = Arc::from(validated.create_backend());
 
-    // Create progress indicator
+    // Create progress indicator for gathering docs phase
     let progress = Progress::new("Gathering documentation...");
 
     // Gather man page references for context
@@ -429,6 +432,12 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
         Vec::new()
     };
 
+    // Clear the initial progress
+    if let Some(ref p) = progress {
+        p.finish_and_clear();
+    }
+    drop(progress);
+
     log::debug!("Extracted commands: {:?}", extract_command_names(command_to_explain));
     log::debug!("Man page references gathered: {}", references.len());
     for r in &references {
@@ -437,6 +446,7 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
 
     // Resolve the effective locale for AI responses
     let locale = resolve_locale(config.locale.value.as_deref());
+    let output_format = config.output_format.value;
 
     // Retry loop: on RequestTooLarge, drop the shortest man page reference and retry
     loop {
@@ -456,11 +466,6 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
         log::debug!("System messages: {} (1 instructions + {} man pages), User messages: 1",
                   system_messages.len(), references.len());
 
-        // Update progress for API call
-        if let Some(ref p) = progress {
-            p.set_message("Waiting for AI response...");
-        }
-
         let request = CompletionRequest {
             system_messages,
             user_message: command_to_explain.to_string(),
@@ -468,20 +473,109 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
             schema_name: "command_explanation".to_string(),
         };
 
-        match backend.complete(&request) {
+        // Try to create streaming preview (None if not TTY)
+        let mut preview = StreamingPreview::new(config.preview_mode.value)?;
+
+        let result = if let Some(ref mut preview) = preview {
+            // Streaming mode with live preview
+            let chunks_handle = preview.chunks_handle();
+            let char_count_handle = preview.char_count_handle();
+            let status_handle = preview.status_handle();
+
+            let callback: StreamCallback = Box::new(move |event| {
+                use crate::preview::{append_chunk, ChunkType};
+                match event {
+                    StreamEvent::TextDelta(text) => {
+                        // Clear status when we start receiving content (retry succeeded)
+                        if let Ok(mut status) = status_handle.lock() {
+                            *status = None;
+                        }
+                        let text_chars = text.chars().count();
+                        if let Ok(mut chunks) = chunks_handle.lock() {
+                            append_chunk(&mut chunks, ChunkType::Content, text);
+                        }
+                        if let Ok(mut count) = char_count_handle.lock() {
+                            *count += text_chars;
+                        }
+                    }
+                    StreamEvent::Preamble(text) => {
+                        // Clear status when we start receiving content (retry succeeded)
+                        if let Ok(mut status) = status_handle.lock() {
+                            *status = None;
+                        }
+                        let text_chars = text.chars().count();
+                        if let Ok(mut chunks) = chunks_handle.lock() {
+                            append_chunk(&mut chunks, ChunkType::Preamble, text);
+                        }
+                        if let Ok(mut count) = char_count_handle.lock() {
+                            *count += text_chars;
+                        }
+                    }
+                    StreamEvent::Backoff { attempt, delay_ms } => {
+                        if let Ok(mut status) = status_handle.lock() {
+                            let secs = delay_ms as f64 / 1000.0;
+                            *status = Some(format!("backoff #{}, {:.1}s", attempt, secs));
+                        }
+                    }
+                    StreamEvent::Retrying { attempt } => {
+                        if let Ok(mut status) = status_handle.lock() {
+                            *status = Some(format!("retry #{}", attempt));
+                        }
+                    }
+                }
+            });
+
+            let backend_clone = Arc::clone(&backend);
+            let request_clone = request.clone();
+
+            // Spawn the blocking backend call
+            let task = tokio::task::spawn_blocking(move || {
+                backend_clone.complete_streaming(&request_clone, callback)
+            });
+
+            // Render loop while waiting for completion
+            loop {
+                preview.render()?;
+                tokio::time::sleep(Duration::from_millis(80)).await;
+
+                if task.is_finished() {
+                    break;
+                }
+            }
+
+            // Get the result
+            task.await.map_err(|e| anyhow!("Task join error: {}", e))?
+        } else {
+            // Non-TTY mode: use simple progress indicator
+            let progress = Progress::new("Generating explanation...");
+            let backend_clone = Arc::clone(&backend);
+            let request_clone = request.clone();
+
+            let result = tokio::task::spawn_blocking(move || {
+                backend_clone.complete(&request_clone)
+            }).await.map_err(|e| anyhow!("Task join error: {}", e))?;
+
+            if let Some(p) = progress {
+                p.finish_and_clear();
+            }
+
+            result
+        };
+
+        match result {
             Ok(response) => {
+                // Clear streaming preview
+                if let Some(ref mut p) = preview {
+                    p.finish_and_clear()?;
+                }
+
                 log::trace!("Raw model response ({} chars):\n{}", response.content.len(), response.content);
 
                 let explanation: ExplainResult = serde_json::from_str(&response.content)
                     .context("failed to parse explanation JSON from model")?;
 
-                // Clear progress before output
-                if let Some(ref p) = progress {
-                    p.finish_and_clear();
-                }
-
                 // Render output based on output format from config
-                match config.output_format.value {
+                match output_format {
                     OutputFormat::Json => {
                         println!("{}", serde_json::to_string_pretty(&explanation)?);
                     }
@@ -501,14 +595,14 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
                 return Ok(());
             }
             Err(BackendError::RequestTooLarge(msg)) => {
+                // Clear preview before retry
+                if let Some(ref mut p) = preview {
+                    p.finish_and_clear()?;
+                }
+
                 log::debug!("Request too large: {}", msg);
 
                 if references.is_empty() {
-                    // Clear progress before error
-                    if let Some(ref p) = progress {
-                        p.finish_and_clear();
-                    }
-                    // No more references to drop, fail with the error
                     bail!("Request too large: {}", msg);
                 }
 
@@ -518,15 +612,12 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
                     "Context too large, dropping man page for '{}' and retrying...",
                     dropped.command
                 );
-                if let Some(ref p) = progress {
-                    p.set_message(&format!("Retrying without '{}'...", dropped.command));
-                }
                 continue;
             }
             Err(e) => {
-                // Clear progress before error
-                if let Some(ref p) = progress {
-                    p.finish_and_clear();
+                // Clear preview before error
+                if let Some(ref mut p) = preview {
+                    p.finish_and_clear()?;
                 }
                 return Err(anyhow!("{}", e));
             }

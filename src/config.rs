@@ -140,6 +140,22 @@ pub enum DebugLevel {
     Trace,
 }
 
+/// Maximum preview display mode setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, EnumString, EnumIter, Deserialize, Serialize, clap::ValueEnum)]
+#[strum(serialize_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
+#[repr(u8)]
+pub enum PreviewMode {
+    /// Single spinner line only
+    Minimal = 0,
+    /// One line per suggestion/compact explanation
+    Compact = 1,
+    /// Full multi-line display (default)
+    #[default]
+    Full = 2,
+}
+
 impl DebugLevel {
     /// Convert to log::LevelFilter
     pub fn to_level_filter(self) -> log::LevelFilter {
@@ -168,6 +184,7 @@ pub mod env {
     pub const SHAI_SKIP_CONFIRM: &str = "SHAI_SKIP_CONFIRM"; // Legacy, implies noninteractive
     pub const SHAI_FRONTEND: &str = "SHAI_FRONTEND";
     pub const SHAI_OUTPUT_FORMAT: &str = "SHAI_OUTPUT_FORMAT";
+    pub const SHAI_PREVIEW_MODE: &str = "SHAI_PREVIEW_MODE";
     pub const SHAI_MAX_REFERENCE_CHARS: &str = "SHAI_MAX_REFERENCE_CHARS";
     pub const SHAI_MAX_TOKENS: &str = "SHAI_MAX_TOKENS";
     pub const SHAI_DEBUG: &str = "SHAI_DEBUG";
@@ -477,6 +494,10 @@ pub const GLOBAL_SETTINGS_METADATA: &[FieldMeta] = &[
     FieldMeta::new("output_format", "Output format: human or json")
         .env(env::SHAI_OUTPUT_FORMAT)
         .default("human")
+        .section(Section::Ui),
+    FieldMeta::new("preview_mode", "Maximum preview display mode (minimal, compact, full)")
+        .env(env::SHAI_PREVIEW_MODE)
+        .default("full")
         .section(Section::Ui),
     FieldMeta::new("max_reference_chars", "Max characters for man page references in explain")
         .env(env::SHAI_MAX_REFERENCE_CHARS)
@@ -896,6 +917,8 @@ pub struct CliOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_mode: Option<PreviewMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub debug: Option<DebugLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
@@ -962,6 +985,7 @@ pub struct TomlConfig {
     pub suggestion_count: Option<u32>,
     pub frontend: Option<Frontend>,
     pub output_format: Option<OutputFormat>,
+    pub preview_mode: Option<PreviewMode>,
     #[serde(default, deserialize_with = "deserialize_flexible")]
     pub max_reference_chars: Option<u32>,
     #[serde(default, deserialize_with = "deserialize_flexible")]
@@ -990,6 +1014,7 @@ pub struct AppConfig {
     // UI settings
     pub frontend: ConfigValue<Frontend>,
     pub output_format: ConfigValue<OutputFormat>,
+    pub preview_mode: ConfigValue<PreviewMode>,
 
     // Suggest-specific settings
     pub suggestion_count: ConfigValue<u32>,
@@ -1279,6 +1304,10 @@ impl AppConfig {
                 parsed.output_format.unwrap_or(OutputFormat::Human),
                 sources.get("output_format").copied().unwrap_or(ConfigSource::Default),
             ),
+            preview_mode: ConfigValue::new(
+                parsed.preview_mode.unwrap_or(PreviewMode::Full),
+                sources.get("preview_mode").copied().unwrap_or(ConfigSource::Default),
+            ),
             suggestion_count: ConfigValue::new(
                 parsed.suggestion_count.unwrap_or(3),
                 sources.get("suggestion_count").copied().unwrap_or(ConfigSource::Default),
@@ -1525,6 +1554,7 @@ impl AppConfig {
             }
             "frontend" => Some((self.frontend.value.to_string(), self.frontend.source)),
             "output_format" => Some((self.output_format.value.to_string(), self.output_format.source)),
+            "preview_mode" => Some((self.preview_mode.value.to_string(), self.preview_mode.source)),
             "max_reference_chars" => Some((self.max_reference_chars.value.to_string(), self.max_reference_chars.source)),
             "max_tokens" => {
                 let effective = self.effective_max_tokens();

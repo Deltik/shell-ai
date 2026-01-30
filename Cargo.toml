@@ -51,3 +51,4 @@ strum = { version = "0.27", features = ["derive"] }
 log = "0.4"
 indicatif = "0.18"
 crossterm = "0.29"
+unicode-width = "0.2"

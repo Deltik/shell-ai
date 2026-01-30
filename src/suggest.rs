@@ -1,15 +1,16 @@
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
 use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 
-use crate::backend::{Backend, BackendError, CompletionRequest};
+use crate::backend::{Backend, BackendError, CompletionRequest, StreamCallback, StreamEvent};
 use crate::config::{resolve_locale, AppConfig, Frontend, OutputFormat, ValidatedConfig};
 use crate::explain;
-use crate::progress::Progress;
+use crate::preview::SuggestProgress;
 use crate::ui::{self, InteractiveSelect, TextInput};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -123,13 +124,8 @@ async fn dialog_frontend(validated: &ValidatedConfig<'_>, initial_prompt: &str, 
     }
 
     'outer: loop {
-        // Show progress while generating suggestions
-        let progress = Progress::new("Generating suggestions...");
-        let suggestions = generate_suggestions(validated, &prompt, ctx_enabled, &ctx_buffer, None).await;
-        if let Some(ref p) = progress {
-            p.finish_and_clear();
-        }
-        let suggestions = suggestions?;
+        // Generate suggestions (streaming progress is shown internally)
+        let suggestions = generate_suggestions(validated, &prompt, ctx_enabled, &ctx_buffer, None).await?;
 
         // Selection menu loop - allows returning here without regenerating
         'selection: loop {
@@ -245,13 +241,8 @@ async fn readline_frontend(validated: &ValidatedConfig<'_>, initial_prompt: &str
     let stdin = io::stdin();
 
     'outer: loop {
-        // Show progress while generating suggestions
-        let progress = Progress::new("Generating suggestions...");
-        let suggestions = generate_suggestions(validated, &prompt, ctx_enabled, &ctx_buffer, None).await;
-        if let Some(ref p) = progress {
-            p.finish_and_clear();
-        }
-        let suggestions = suggestions?;
+        // Generate suggestions (streaming progress is shown internally)
+        let suggestions = generate_suggestions(validated, &prompt, ctx_enabled, &ctx_buffer, None).await?;
 
         // Selection loop - allows returning here without regenerating
         'selection: loop {
@@ -369,12 +360,8 @@ async fn noninteractive_frontend(validated: &ValidatedConfig<'_>, prompt: &str) 
         OutputFormat::Human => Some(1),
         OutputFormat::Json => None,
     };
-    let progress = Progress::new("Generating suggestions...");
-    let suggestions = generate_suggestions(validated, prompt, false, "", count_override).await;
-    if let Some(ref p) = progress {
-        p.finish_and_clear();
-    }
-    let suggestions = suggestions?;
+    // Generate suggestions (streaming progress is shown internally)
+    let suggestions = generate_suggestions(validated, prompt, false, "", count_override).await?;
 
     match config.output_format.value {
         OutputFormat::Json => {
@@ -399,7 +386,6 @@ async fn generate_suggestions(
 ) -> Result<Vec<Suggestion>> {
     let config = validated.app_config();
     let count = count_override.unwrap_or_else(|| config.suggestion_count.value.max(1) as usize);
-    let max_workers = 4usize;
 
     let prompt_string = prompt.to_string();
     let ctx_string = if ctx_enabled { ctx_buffer.to_string() } else { String::new() };
@@ -408,53 +394,94 @@ async fn generate_suggestions(
     // Create backend once and share across parallel tasks
     let backend: Arc<dyn Backend> = Arc::from(validated.create_backend());
 
-    let tasks = stream::iter(0..count).map(|_| {
+    // Create streaming progress (None if not TTY)
+    let mut progress = SuggestProgress::new(count, config.preview_mode.value)?;
+    let shared_slots = progress.as_ref().map(|p| p.shared_slots());
+
+    // Spawn tasks with slot indices
+    let tasks = stream::iter(0..count).map(|slot_idx| {
         let p = prompt_string.clone();
         let c = ctx_string.clone();
         let loc = locale.clone();
         let backend = Arc::clone(&backend);
-        async move { suggest_once(backend, &p, &c, loc.as_deref()).await }
+        let slots = shared_slots.clone();
+
+        async move {
+            suggest_once_streaming(backend, &p, &c, loc.as_deref(), slot_idx, slots).await
+        }
     });
 
     let mut results: Vec<Suggestion> = Vec::new();
     let mut last_error: Option<String> = None;
 
-    tasks
-        .buffer_unordered(max_workers)
-        .for_each(|res| {
-            match res {
-                Ok(Some(s)) if !s.command.trim().is_empty() => {
-                    if !results.iter().any(|existing| existing.command == s.command) {
-                        results.push(s);
+    // Use a channel to receive results while rendering
+    let (tx, mut rx) = tokio::sync::mpsc::channel(count);
+
+    // Spawn all tasks
+    for task in tasks.collect::<Vec<_>>().await {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let result = task.await;
+            let _ = tx.send(result).await;
+        });
+    }
+    drop(tx); // Close sender so receiver knows when all tasks are done
+
+    // Render loop while receiving results
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Some(Ok(Some(s))) if !s.command.trim().is_empty() => {
+                        if !results.iter().any(|existing| existing.command == s.command) {
+                            results.push(s);
+                        }
+                    }
+                    Some(Ok(Some(_))) => {} // Empty command
+                    Some(Ok(None)) => {}    // No suggestion
+                    Some(Err(e)) => {
+                        log::debug!("Suggestion attempt failed: {}", e);
+                        last_error = Some(e.to_string());
+                    }
+                    None => {
+                        // All tasks complete
+                        break;
                     }
                 }
-                Ok(Some(_)) => {} // Empty command, skip
-                Ok(None) => {}    // No suggestion, skip
-                Err(e) => {
-                    log::debug!("Suggestion attempt failed: {}", e);
-                    last_error = Some(e.to_string());
+            }
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                // Render progress if available
+                if let Some(ref mut p) = progress {
+                    p.render()?;
                 }
             }
-            futures::future::ready(())
-        })
-        .await;
+        }
+    }
+
+    // Final render and clear
+    if let Some(ref mut p) = progress {
+        p.finish_and_clear()?;
+    }
 
     if results.is_empty() {
         let reason = last_error.unwrap_or_else(|| "unknown error".to_string());
-        Err(anyhow!(
+        return Err(anyhow!(
             "No suggestions could be generated.\nReason: {}",
             reason
-        ))
-    } else {
-        Ok(results)
+        ));
     }
+
+    Ok(results)
 }
 
-async fn suggest_once(
+/// Generate a single suggestion with streaming progress updates.
+async fn suggest_once_streaming(
     backend: Arc<dyn Backend>,
     prompt: &str,
     ctx_buffer: &str,
     locale: Option<&str>,
+    slot_idx: usize,
+    shared_slots: Option<crate::preview::SharedSlots>,
 ) -> Result<Option<Suggestion>> {
     let mut system_message = String::from(
         "You are an expert at using shell commands. Respond with a JSON object only, \
@@ -496,35 +523,73 @@ async fn suggest_once(
         schema_name: "shell_command_suggestion".to_string(),
     };
 
-    // Use spawn_blocking to run the synchronous backend.complete() on a thread pool
-    // This allows multiple requests to run in parallel
+    let callback_slots = shared_slots.clone();
+    let extractor = Arc::new(Mutex::new(CommandExtractor::new()));
+    let callback_extractor = extractor.clone();
+    let callback: StreamCallback = Box::new(move |event| {
+        match event {
+            StreamEvent::TextDelta(text) => {
+                if let Some(ref slots) = callback_slots {
+                    let extracted = callback_extractor.lock().unwrap().feed(&text);
+                    crate::preview::update_shared_slot(slots, slot_idx, &extracted);
+                }
+            }
+            StreamEvent::Preamble(_) => {
+                // Ignore preamble for suggest mode - we only care about the command output
+            }
+            StreamEvent::Backoff { attempt, delay_ms } => {
+                if let Some(ref slots) = callback_slots {
+                    crate::preview::backoff_shared_slot(slots, slot_idx, attempt, delay_ms);
+                }
+            }
+            StreamEvent::Retrying { attempt } => {
+                if let Some(ref slots) = callback_slots {
+                    crate::preview::retrying_shared_slot(slots, slot_idx, attempt);
+                }
+            }
+        }
+    });
+
+    // Use spawn_blocking with streaming
     let response = tokio::task::spawn_blocking(move || {
-        backend.complete(&request)
+        backend.complete_streaming(&request, callback)
     })
     .await
-    .map_err(|e| anyhow!("Task join error: {}", e))?
-    .map_err(|e| {
-        match e {
-            BackendError::ApiError(msg) => anyhow!("API error: {}", msg),
-            BackendError::NetworkError(msg) => anyhow!("Network error: {}", msg),
-            BackendError::ParseError(msg) => anyhow!("Parse error: {}", msg),
-            BackendError::RequestTooLarge(msg) => anyhow!("Request too large: {}", msg),
-            BackendError::Other(e) => e,
-        }
-    })?;
+    .map_err(|e| anyhow!("Task join error: {}", e))?;
 
-    let suggestion: Suggestion = serde_json::from_str(&response.content).map_err(|e| {
-        // If parsing failed and response was truncated, give a helpful hint
-        if response.is_truncated {
-            anyhow!(
-                "Response truncated (max_tokens too low). Increase --max-tokens or SHAI_MAX_TOKENS."
-            )
-        } else {
-            anyhow!("Failed to parse JSON from model: {}\nReceived: {}", e, response.content)
-        }
-    })?;
+    match response {
+        Ok(resp) => {
+            let suggestion: Suggestion = serde_json::from_str(&resp.content).map_err(|e| {
+                if resp.is_truncated {
+                    anyhow!(
+                        "Response truncated (max_tokens too low). Increase --max-tokens or SHAI_MAX_TOKENS."
+                    )
+                } else {
+                    anyhow!("Failed to parse JSON from model: {}\nReceived: {}", e, resp.content)
+                }
+            })?;
 
-    Ok(Some(suggestion))
+            // Mark slot as complete with the command (if TTY)
+            if let Some(ref slots) = shared_slots {
+                crate::preview::complete_shared_slot(slots, slot_idx, suggestion.command.clone());
+            }
+            Ok(Some(suggestion))
+        }
+        Err(e) => {
+            // Mark slot as errored (if TTY)
+            if let Some(ref slots) = shared_slots {
+                crate::preview::error_shared_slot(slots, slot_idx, e.to_string());
+            }
+            Err(match e {
+                BackendError::ApiError(msg) => anyhow!("API error: {}", msg),
+                BackendError::RateLimited(msg) => anyhow!("Rate limited: {}", msg),
+                BackendError::NetworkError(msg) => anyhow!("Network error: {}", msg),
+                BackendError::ParseError(msg) => anyhow!("Parse error: {}", msg),
+                BackendError::RequestTooLarge(msg) => anyhow!("Request too large: {}", msg),
+                BackendError::Other(msg) => anyhow!("{}", msg),
+            })
+        }
+    }
 }
 
 fn run_command_default(command: &str) -> Result<()> {

@@ -63,11 +63,6 @@ impl Progress {
         Some(Self { bar })
     }
 
-    /// Update the progress message.
-    pub fn set_message(&self, message: &str) {
-        self.bar.set_message(message.to_string());
-    }
-
     /// Finish the progress indicator and clear it from the terminal.
     ///
     /// Call this before printing results to avoid visual artifacts.

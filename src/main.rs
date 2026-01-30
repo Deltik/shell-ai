@@ -8,11 +8,13 @@ mod explain;
 mod http;
 mod integration;
 mod logger;
+mod preview;
 mod progress;
+mod render;
 mod suggest;
 mod ui;
 
-use crate::config::{AppConfig, CliOverrides, DebugLevel, OutputFormat};
+use crate::config::{AppConfig, CliOverrides, DebugLevel, OutputFormat, PreviewMode};
 
 /// Global options available on all commands.
 #[derive(Parser, Debug, Clone, Default)]
@@ -40,6 +42,10 @@ pub struct GlobalOptions {
     /// Output format: human, json
     #[arg(long = "output-format", global = true)]
     pub output_format: Option<String>,
+
+    /// Maximum preview display mode (minimal, compact, full)
+    #[arg(long = "preview-mode", short = 'P', global = true, value_enum)]
+    pub preview_mode: Option<PreviewMode>,
 
     /// Enable debug output (prints debug info to stderr).
     /// Use --debug for debug level, --debug=trace for trace level.
@@ -167,6 +173,7 @@ fn global_to_cli_overrides(global: &GlobalOptions) -> CliOverrides {
         temperature: global.temperature,
         frontend: global.frontend.clone(),
         output_format: global.output_format.clone(),
+        preview_mode: global.preview_mode,
         debug: global.debug,
         locale: global.locale.clone(),
     }

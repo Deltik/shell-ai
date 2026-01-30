@@ -8,9 +8,17 @@
 //! - Ollama
 //! - Any OpenAI-compatible API
 
-use super::{Backend, BackendError, CompletionRequest, CompletionResponse};
+use super::{Backend, BackendError, CompletionRequest, CompletionResponse, StreamCallback, StreamEvent};
 use crate::http;
 use serde_json::json;
+use std::thread;
+use std::time::Duration;
+
+/// Maximum number of retry attempts for rate limiting (HTTP 429).
+const MAX_RETRIES: u32 = 5;
+
+/// Base delay for exponential backoff in milliseconds.
+const BASE_DELAY_MS: u64 = 1000;
 
 /// Backend for OpenAI-compatible HTTP APIs.
 #[derive(Clone)]
@@ -56,29 +64,23 @@ impl OpenAiBackend {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect()
     }
-}
 
-impl Backend for OpenAiBackend {
-    fn complete(&self, request: &CompletionRequest) -> Result<CompletionResponse, BackendError> {
-        // Build messages array
+    /// Build the request payload.
+    fn build_payload(&self, request: &CompletionRequest, stream: bool) -> serde_json::Value {
         let mut messages: Vec<serde_json::Value> = Vec::new();
 
-        // Add system messages
         for sys_msg in &request.system_messages {
             messages.push(json!({"role": "system", "content": sys_msg}));
         }
-
-        // Add user message
         messages.push(json!({"role": "user", "content": &request.user_message}));
 
-        // Build payload
         let mut payload = json!({
             "model": &self.model,
             "messages": messages,
             "temperature": self.temperature,
+            "stream": stream,
         });
 
-        // Add JSON schema for structured output if provided
         if let Some(ref schema) = request.json_schema {
             payload["response_format"] = json!({
                 "type": "json_schema",
@@ -90,60 +92,121 @@ impl Backend for OpenAiBackend {
             });
         }
 
-        // Add max_tokens if configured
         if let Some(max_tokens) = self.max_tokens {
             payload["max_tokens"] = json!(max_tokens);
         }
 
+        payload
+    }
+}
+
+impl Backend for OpenAiBackend {
+    fn complete_streaming(
+        &self,
+        request: &CompletionRequest,
+        callback: StreamCallback,
+    ) -> Result<CompletionResponse, BackendError> {
+        let payload = self.build_payload(request, true);
         let bearer_token = self.api_key.as_deref();
         let extra_headers = self.extra_headers_ref();
 
-        // Use post_json_raw to get status code for 413 detection
-        let (status, body) = http::post_json_raw(&self.url, bearer_token, &extra_headers, &payload)
-            .map_err(|e| BackendError::NetworkError(e.to_string()))?;
+        // Retry loop for rate limiting
+        for attempt in 0..=MAX_RETRIES {
+            let mut stream = http::post_json_streaming(&self.url, bearer_token, &extra_headers, &payload)
+                .map_err(|e| BackendError::NetworkError(e.to_string()))?;
 
-        // Handle 413 Request Entity Too Large
-        if status == 413 {
-            return Err(BackendError::RequestTooLarge(
-                if body.is_empty() {
-                    "context length exceeded".to_string()
-                } else {
-                    body
-                },
-            ));
-        }
+            let status = stream.status();
 
-        // Handle other HTTP errors
-        if status < 200 || status >= 300 {
-            return Err(BackendError::ApiError(format!(
-                "HTTP {}: {}",
-                status,
-                if body.is_empty() {
-                    "Unknown error".to_string()
+            // Handle HTTP 429 (rate limiting) with Retry-After header or exponential backoff
+            if status == 429 {
+                if attempt < MAX_RETRIES {
+                    // Use Retry-After header if provided, otherwise exponential backoff
+                    let delay_ms = stream
+                        .retry_after_secs()
+                        .map(|secs| secs * 1000)
+                        .unwrap_or_else(|| BASE_DELAY_MS * (1 << attempt));
+                    callback(StreamEvent::Backoff { attempt: attempt + 1, delay_ms });
+                    thread::sleep(Duration::from_millis(delay_ms));
+                    callback(StreamEvent::Retrying { attempt: attempt + 1 });
+                    continue;
                 } else {
-                    body
+                    let body = stream.read_body().unwrap_or_default().trim().to_string();
+                    return Err(BackendError::RateLimited(
+                        if body.is_empty() { "Too many requests".to_string() } else { body }
+                    ));
                 }
-            )));
+            }
+
+            // Handle HTTP errors
+            if status == 413 {
+                let body = stream.read_body().unwrap_or_default().trim().to_string();
+                return Err(BackendError::RequestTooLarge(
+                    if body.is_empty() { "context length exceeded".to_string() } else { body }
+                ));
+            }
+
+            if status < 200 || status >= 300 {
+                let body = stream.read_body().unwrap_or_default().trim().to_string();
+                return Err(BackendError::ApiError(format!(
+                    "HTTP {}: {}",
+                    status,
+                    if body.is_empty() { "Unknown error".to_string() } else { body }
+                )));
+            }
+
+            // Process SSE stream
+            let mut full_content = String::new();
+            let mut is_truncated = false;
+
+            while let Some(data) = stream.next_data().map_err(|e| BackendError::NetworkError(e.to_string()))? {
+                // Parse the SSE data as JSON
+                let chunk: serde_json::Value = match serde_json::from_str(&data) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::debug!("Failed to parse SSE chunk: {} - data: {}", e, data);
+                        continue;
+                    }
+                };
+
+                // Check for error in chunk
+                if let Some(error) = chunk.get("error") {
+                    let msg = error.get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Unknown error");
+                    return Err(BackendError::ApiError(msg.to_string()));
+                }
+
+                // Extract delta content from choices[0].delta.content
+                if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
+                    for choice in choices {
+                        // Check finish reason
+                        if let Some(finish_reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
+                            if finish_reason == "length" {
+                                is_truncated = true;
+                            }
+                        }
+
+                        // Extract delta content
+                        if let Some(content) = choice.get("delta")
+                            .and_then(|d| d.get("content"))
+                            .and_then(|c| c.as_str())
+                        {
+                            if !content.is_empty() {
+                                full_content.push_str(content);
+                                callback(StreamEvent::TextDelta(content.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            return Ok(CompletionResponse {
+                content: full_content,
+                is_truncated,
+            });
         }
 
-        // Parse response JSON
-        let resp_json: serde_json::Value = serde_json::from_str(&body)
-            .map_err(|e| BackendError::ParseError(format!("failed to parse API response: {}", e)))?;
-
-        // Check for API error in response body
-        if let Some(msg) = http::extract_api_error(&resp_json) {
-            return Err(BackendError::ApiError(msg));
-        }
-
-        // Extract content from response
-        let content = http::extract_content_from_response(&resp_json)
-            .map_err(|e| BackendError::ParseError(e.to_string()))?;
-
-        let is_truncated = http::is_truncated(&resp_json);
-
-        Ok(CompletionResponse {
-            content: content.to_string(),
-            is_truncated,
-        })
+        // This should be unreachable, but just in case
+        Err(BackendError::RateLimited("Max retries exceeded".to_string()))
     }
 }

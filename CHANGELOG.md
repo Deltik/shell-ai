@@ -7,9 +7,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.5.4 (UNRELEASED)
+## v0.6.0 (UNRELEASED)
+
+### Added
+
+- **Live streaming previews for suggestions and explanations**
+
+  Watch AI responses materialize in real-time. As suggestions generate, they appear token-by-token in a dedicated preview pane. This tighter feedback loop lets you see results faster before they're all ready.
+
+  - `shell-ai suggest`: See all your suggestions stream in simultaneously, each in its own slot. Pick the one you want the moment it looks right.
+  - `shell-ai explain`: See the breakdown stream directly into your terminal as the AI reasons through the command.
+
+  The preview adapts to your terminal: If there's not enough room for all the content, it gracefully truncates while preserving structure.
+
+- **New `preview_mode` setting** to control maximum preview display density
+
+  - `minimal`: Single line progress indicator (similar to v0.5 behavior)
+  - `compact`: Add a preview pane with a line per item with truncation
+  - `full` (default): Multi-line previews with full content
+
+  Configure via:
+  - CLI: `--preview-mode=minimal`
+  - Environment: `SHAI_PREVIEW_MODE=compact`
+  - Config file: `preview_mode = "minimal"` in `~/.config/shell-ai/config.toml`
+
+  > [!TIP]
+  > Set to `minimal` for an experience closer to Shell-AI v0.5.
 
 ### Changed
+
+- **Switched to streaming API responses** for all providers (OpenAI, Anthropic, Claude Code).
+
+  Previous versions waited for the entire response before displaying results. Now tokens stream as they arrive, enabling the live preview feature. This also means you can interrupt (Ctrl+C) early if you see a good result.
 
 - **API keys are now optional** for OpenAI, Anthropic, Groq, and Mistral providers, so the `api_key` option may be left empty.
 

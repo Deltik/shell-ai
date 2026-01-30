@@ -3,15 +3,23 @@
 //! This backend uses the Anthropic Messages API directly, with tool use
 //! for structured output enforcement.
 
-use super::{Backend, BackendError, CompletionRequest, CompletionResponse};
+use super::{Backend, BackendError, CompletionRequest, CompletionResponse, StreamCallback, StreamEvent};
 use crate::http;
 use serde_json::json;
+use std::thread;
+use std::time::Duration;
 
 /// Anthropic API version header value
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// Default max tokens for Anthropic (required field)
 const DEFAULT_MAX_TOKENS: u32 = 64000;
+
+/// Maximum number of retry attempts for rate limiting (HTTP 429).
+const MAX_RETRIES: u32 = 5;
+
+/// Base delay for exponential backoff in milliseconds.
+const BASE_DELAY_MS: u64 = 1000;
 
 /// Backend for the native Anthropic Messages API.
 #[derive(Clone)]
@@ -36,20 +44,11 @@ impl AnthropicBackend {
             max_tokens,
         }
     }
-}
 
-impl Backend for AnthropicBackend {
-    fn complete(&self, request: &CompletionRequest) -> Result<CompletionResponse, BackendError> {
-        let url = format!(
-            "{}/v1/messages",
-            self.base_url.trim_end_matches('/')
-        );
-
-        // Combine system messages into a single system field
-        // Anthropic uses a top-level "system" field, not system role messages
+    /// Build the request payload.
+    fn build_payload(&self, request: &CompletionRequest, stream: bool) -> serde_json::Value {
         let system_content = request.system_messages.join("\n\n");
 
-        // Build the base payload
         let mut payload = json!({
             "model": &self.model,
             "max_tokens": self.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
@@ -57,10 +56,10 @@ impl Backend for AnthropicBackend {
             "messages": [
                 { "role": "user", "content": &request.user_message }
             ],
+            "stream": stream,
         });
 
         // Use tool use for structured output if schema provided
-        // This forces the model to respond with valid JSON matching the schema
         if let Some(ref schema) = request.json_schema {
             payload["tools"] = json!([{
                 "name": &request.schema_name,
@@ -73,7 +72,19 @@ impl Backend for AnthropicBackend {
             });
         }
 
-        // Anthropic uses x-api-key header, not Bearer token
+        payload
+    }
+}
+
+impl Backend for AnthropicBackend {
+    fn complete_streaming(
+        &self,
+        request: &CompletionRequest,
+        callback: StreamCallback,
+    ) -> Result<CompletionResponse, BackendError> {
+        let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
+        let payload = self.build_payload(request, true);
+
         let mut extra_headers = vec![
             ("anthropic-version", ANTHROPIC_VERSION),
         ];
@@ -81,117 +92,152 @@ impl Backend for AnthropicBackend {
             extra_headers.push(("x-api-key", key.as_str()));
         }
 
-        // Use post_json_raw for detailed error handling
-        let (status, body) = http::post_json_raw(&url, None, &extra_headers, &payload)
-            .map_err(|e| BackendError::NetworkError(e.to_string()))?;
+        // Retry loop for rate limiting
+        for attempt in 0..=MAX_RETRIES {
+            let mut stream = http::post_json_streaming(&url, None, &extra_headers, &payload)
+                .map_err(|e| BackendError::NetworkError(e.to_string()))?;
 
-        // Handle 413 Request Entity Too Large
-        if status == 413 {
-            return Err(BackendError::RequestTooLarge(
-                if body.is_empty() {
-                    "context length exceeded".to_string()
+            let status = stream.status();
+
+            // Handle HTTP 429 (rate limiting) with Retry-After header or exponential backoff
+            if status == 429 {
+                if attempt < MAX_RETRIES {
+                    // Use Retry-After header if provided, otherwise exponential backoff
+                    let delay_ms = stream
+                        .retry_after_secs()
+                        .map(|secs| secs * 1000)
+                        .unwrap_or_else(|| BASE_DELAY_MS * (1 << attempt));
+                    callback(StreamEvent::Backoff { attempt: attempt + 1, delay_ms });
+                    thread::sleep(Duration::from_millis(delay_ms));
+                    callback(StreamEvent::Retrying { attempt: attempt + 1 });
+                    continue;
                 } else {
-                    body
-                },
-            ));
-        }
+                    let body = stream.read_body().unwrap_or_default().trim().to_string();
+                    return Err(BackendError::RateLimited(
+                        if body.is_empty() { "Too many requests".to_string() } else { body }
+                    ));
+                }
+            }
 
-        // Anthropic uses 400 for context length exceeded with specific error type
-        if status == 400 {
-            if let Ok(resp_json) = serde_json::from_str::<serde_json::Value>(&body) {
-                if let Some(error_type) = resp_json
-                    .get("error")
-                    .and_then(|e| e.get("type"))
-                    .and_then(|t| t.as_str())
-                {
-                    if error_type == "invalid_request_error" {
-                        if let Some(msg) = resp_json
-                            .get("error")
-                            .and_then(|e| e.get("message"))
-                            .and_then(|m| m.as_str())
-                        {
-                            if msg.contains("context length") || msg.contains("too long") {
-                                return Err(BackendError::RequestTooLarge(msg.to_string()));
+            // Handle HTTP errors
+            if status == 413 {
+                let body = stream.read_body().unwrap_or_default().trim().to_string();
+                return Err(BackendError::RequestTooLarge(
+                    if body.is_empty() { "context length exceeded".to_string() } else { body }
+                ));
+            }
+
+            if status == 400 {
+                let body = stream.read_body().unwrap_or_default().trim().to_string();
+                if let Ok(resp_json) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if let Some(error_type) = resp_json.get("error")
+                        .and_then(|e| e.get("type"))
+                        .and_then(|t| t.as_str())
+                    {
+                        if error_type == "invalid_request_error" {
+                            if let Some(msg) = resp_json.get("error")
+                                .and_then(|e| e.get("message"))
+                                .and_then(|m| m.as_str())
+                            {
+                                if msg.contains("context length") || msg.contains("too long") {
+                                    return Err(BackendError::RequestTooLarge(msg.to_string()));
+                                }
                             }
                         }
                     }
                 }
+                return Err(BackendError::ApiError(format!("HTTP 400: {}", body)));
             }
-        }
 
-        // Handle other HTTP errors
-        if status < 200 || status >= 300 {
-            return Err(BackendError::ApiError(format!(
-                "HTTP {}: {}",
-                status,
-                if body.is_empty() {
-                    "Unknown error".to_string()
-                } else {
-                    body
-                }
-            )));
-        }
+            if status < 200 || status >= 300 {
+                let body = stream.read_body().unwrap_or_default().trim().to_string();
+                return Err(BackendError::ApiError(format!(
+                    "HTTP {}: {}",
+                    status,
+                    if body.is_empty() { "Unknown error".to_string() } else { body }
+                )));
+            }
 
-        // Parse response JSON
-        let resp_json: serde_json::Value = serde_json::from_str(&body)
-            .map_err(|e| BackendError::ParseError(format!("failed to parse API response: {}", e)))?;
+            // Process SSE stream
+            // Anthropic streaming format differs from OpenAI:
+            // - event: content_block_delta with delta.type="text_delta" for text
+            // - event: content_block_delta with delta.type="input_json_delta" for tool input
+            let mut full_content = String::new();
+            let mut tool_input = String::new();
+            let mut is_truncated = false;
+            let expect_tool_use = request.json_schema.is_some();
 
-        // Check for Anthropic error format
-        if let Some(error) = resp_json.get("error") {
-            let msg = error
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Unknown error");
-            return Err(BackendError::ApiError(msg.to_string()));
-        }
+            while let Some(data) = stream.next_data().map_err(|e| BackendError::NetworkError(e.to_string()))? {
+                let event: serde_json::Value = match serde_json::from_str(&data) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::debug!("Failed to parse Anthropic SSE chunk: {} - data: {}", e, data);
+                        continue;
+                    }
+                };
 
-        // Extract content based on whether we expect tool use or text
-        let content = extract_anthropic_content(&resp_json, request.json_schema.is_some())?;
+                let event_type = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
-        // Check for truncation
-        let stop_reason = resp_json
-            .get("stop_reason")
-            .and_then(|r| r.as_str())
-            .unwrap_or("");
-        let is_truncated = stop_reason == "max_tokens";
+                match event_type {
+                    "content_block_delta" => {
+                        if let Some(delta) = event.get("delta") {
+                            let delta_type = delta.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
-        Ok(CompletionResponse {
-            content,
-            is_truncated,
-        })
-    }
-}
-
-/// Extract content from Anthropic response.
-///
-/// If expecting tool use (structured output), extracts from `content[].input`.
-/// Otherwise, extracts from `content[].text`.
-fn extract_anthropic_content(resp: &serde_json::Value, expect_tool_use: bool) -> Result<String, BackendError> {
-    let content_array = resp
-        .get("content")
-        .and_then(|c| c.as_array())
-        .ok_or_else(|| BackendError::ParseError("Missing content array in response".to_string()))?;
-
-    if expect_tool_use {
-        // Look for tool_use block and extract the input as JSON string
-        for block in content_array {
-            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                if let Some(input) = block.get("input") {
-                    return serde_json::to_string(input)
-                        .map_err(|e| BackendError::ParseError(format!("Failed to serialize tool input: {}", e)));
+                            match delta_type {
+                                "text_delta" => {
+                                    if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
+                                        if !text.is_empty() {
+                                            full_content.push_str(text);
+                                            callback(StreamEvent::TextDelta(text.to_string()));
+                                        }
+                                    }
+                                }
+                                "input_json_delta" => {
+                                    // For tool use, accumulate the partial JSON
+                                    if let Some(partial) = delta.get("partial_json").and_then(|p| p.as_str()) {
+                                        tool_input.push_str(partial);
+                                        callback(StreamEvent::TextDelta(partial.to_string()));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    "message_delta" => {
+                        // Check stop reason
+                        if let Some(delta) = event.get("delta") {
+                            if let Some(stop_reason) = delta.get("stop_reason").and_then(|r| r.as_str()) {
+                                if stop_reason == "max_tokens" {
+                                    is_truncated = true;
+                                }
+                            }
+                        }
+                    }
+                    "error" => {
+                        let msg = event.get("error")
+                            .and_then(|e| e.get("message"))
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("Unknown error");
+                        return Err(BackendError::ApiError(msg.to_string()));
+                    }
+                    _ => {}
                 }
             }
+
+            // Determine final content based on whether we expected tool use
+            let content = if expect_tool_use && !tool_input.is_empty() {
+                tool_input
+            } else {
+                full_content
+            };
+
+            return Ok(CompletionResponse {
+                content,
+                is_truncated,
+            });
         }
-        Err(BackendError::ParseError("No tool_use block found in response".to_string()))
-    } else {
-        // Look for text block
-        for block in content_array {
-            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                    return Ok(text.to_string());
-                }
-            }
-        }
-        Err(BackendError::ParseError("No text block found in response".to_string()))
+
+        // This should be unreachable, but just in case
+        Err(BackendError::RateLimited("Max retries exceeded".to_string()))
     }
 }
