@@ -85,12 +85,19 @@ impl InteractiveSelect {
             if let Event::Key(key_event) = event::read()? {
                 match self.handle_key(key_event) {
                     KeyAction::Select(key) => {
+                        if key == 'q' {
+                            // Quit preserves display (same as Cancel)
+                            write!(stderr, "\r\n")?;
+                            stderr.flush()?;
+                            return Ok(Some(key));
+                        }
                         // Clear the menu before returning
                         self.clear_menu(&mut stderr)?;
                         return Ok(Some(key));
                     }
                     KeyAction::Cancel => {
-                        self.clear_menu(&mut stderr)?;
+                        write!(stderr, "\r\n")?;
+                        stderr.flush()?;
                         return Ok(None);
                     }
                     KeyAction::MoveUp => {
@@ -180,7 +187,7 @@ impl InteractiveSelect {
         write!(
             w,
             "\r\n{}\r\n",
-            "↑↓/jk navigate • key/Enter select • Esc cancel".dimmed()
+            "↑↓/jk navigate • key/Enter select • Esc quit".dimmed()
         )?;
 
         w.flush()?;

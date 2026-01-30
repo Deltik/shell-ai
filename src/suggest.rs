@@ -21,14 +21,14 @@ struct Suggestion {
 // Command selection options (dialog mode)
 const SYSTEM_OPTION_GEN: &str = "Generate new suggestions";
 const SYSTEM_OPTION_NEW: &str = "Enter a new command";
-const SYSTEM_OPTION_DISMISS: &str = "Dismiss";
+const SYSTEM_OPTION_DISMISS: &str = "Quit";
 
 // Action menu options (after selecting a command)
 const ACTION_COPY: &str = "Copy to clipboard";
 const ACTION_EXPLAIN: &str = "Explain command";
 const ACTION_EXECUTE: &str = "Execute command";
 const ACTION_REVISE: &str = "Revise command";
-const ACTION_EXIT: &str = "Exit";
+const ACTION_EXIT: &str = "Quit";
 
 /// JSON Schema for the `suggest` structured output.
 const SUGGEST_SCHEMA: &str = r#"{
