@@ -11,6 +11,7 @@ use crossterm::{
     terminal::{self, ClearType},
 };
 use std::io::{self, Write};
+use unicode_width::UnicodeWidthStr;
 
 /// An option in an interactive select menu.
 #[derive(Clone)]
@@ -28,6 +29,37 @@ impl SelectOption {
             label: label.into(),
         }
     }
+}
+
+/// Help line segments: (text, is_key). Keys are styled cyan, others dimmed.
+const HELP_SEGMENTS: &[(&str, bool)] = &[
+    ("↑↓", true),
+    ("/", false),
+    ("jk", true),
+    (" navigate ", false),
+    ("•", false),
+    (" ", false),
+    ("key", true),
+    ("/", false),
+    ("Enter", true),
+    (" select ", false),
+    ("•", false),
+    (" ", false),
+    ("Esc", true),
+    (" quit", false),
+];
+
+
+/// Write the help line with styling to a writer.
+fn write_help_line(w: &mut impl Write) -> io::Result<()> {
+    for (text, is_key) in HELP_SEGMENTS {
+        if *is_key {
+            write!(w, "{}", text.cyan())?;
+        } else {
+            write!(w, "{}", text.dimmed())?;
+        }
+    }
+    Ok(())
 }
 
 /// Interactive select menu with arrow navigation and keyboard shortcuts.
@@ -184,22 +216,9 @@ impl InteractiveSelect {
         }
 
         // Print help line
-        write!(
-            w,
-            "\r\n{}{}{} {} {} {}{}{} {} {} {} {}\r\n",
-            "↑↓".cyan(),
-            "/".dimmed(),
-            "jk".cyan(),
-            "navigate".dimmed(),
-            "•".dimmed(),
-            "key".cyan(),
-            "/".dimmed(),
-            "Enter".cyan(),
-            "select".dimmed(),
-            "•".dimmed(),
-            "Esc".cyan(),
-            "quit".dimmed(),
-        )?;
+        write!(w, "\r\n")?;
+        write_help_line(w)?;
+        write!(w, "\r\n")?;
 
         w.flush()?;
         Ok(())
@@ -221,9 +240,9 @@ impl InteractiveSelect {
         }
 
         // Blank line + help line
-        let help_text = "↑↓/jk navigate • key/Enter select • Esc cancel";
+        let help_text: String = HELP_SEGMENTS.iter().map(|(s, _)| *s).collect();
         total_lines += 1; // blank line
-        total_lines += Self::lines_needed(help_text, term_width);
+        total_lines += Self::lines_needed(&help_text, term_width);
 
         total_lines
     }
@@ -239,7 +258,8 @@ impl InteractiveSelect {
                 if line.is_empty() {
                     1
                 } else {
-                    (line.len() + term_width - 1) / term_width // ceiling division
+                    let width = line.width();
+                    (width + term_width - 1) / term_width // ceiling division
                 }
             })
             .sum()
@@ -259,12 +279,13 @@ impl InteractiveSelect {
 
         // First line includes prefix
         let first_line = lines.remove(0);
-        let first_len = prefix_len + first_line.len();
-        total += if first_len == 0 { 1 } else { (first_len + term_width - 1) / term_width };
+        let first_width = prefix_len + first_line.width();
+        total += if first_width == 0 { 1 } else { (first_width + term_width - 1) / term_width };
 
         // Remaining lines have no prefix
         for line in lines {
-            total += if line.is_empty() { 1 } else { (line.len() + term_width - 1) / term_width };
+            let width = line.width();
+            total += if width == 0 { 1 } else { (width + term_width - 1) / term_width };
         }
 
         total
@@ -487,5 +508,62 @@ pub fn copy_to_clipboard(text: &str) {
     match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)) {
         Ok(_) => println!("Command copied to clipboard."),
         Err(e) => log::warn!("Failed to copy to clipboard: {}", e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lines_needed_ascii_exact_fit() {
+        // 80 ASCII chars should be exactly 1 line at term_width=80
+        let line = "a".repeat(80);
+        assert_eq!(InteractiveSelect::lines_needed(&line, 80), 1);
+    }
+
+    #[test]
+    fn test_lines_needed_ascii_one_over() {
+        // 81 ASCII chars should wrap to 2 lines at term_width=80
+        let line = "a".repeat(81);
+        assert_eq!(InteractiveSelect::lines_needed(&line, 80), 2);
+    }
+
+    #[test]
+    fn test_lines_needed_utf8_exact_fit() {
+        // "↑" is 3 bytes but 1 display column
+        // 80 arrows = 80 display columns = 1 line
+        let line = "↑".repeat(80);
+        assert_eq!(InteractiveSelect::lines_needed(&line, 80), 1);
+    }
+
+    #[test]
+    fn test_lines_needed_with_prefix_exact_fit() {
+        // prefix=6, label=74 ASCII chars = 80 total = 1 line
+        let label = "a".repeat(74);
+        assert_eq!(InteractiveSelect::lines_needed_with_prefix(&label, 80, 6), 1);
+    }
+
+    #[test]
+    fn test_lines_needed_with_prefix_utf8_exact_fit() {
+        // prefix=6, 74 arrows (74 display cols, 222 bytes) = 80 display cols = 1 line
+        let label = "↑".repeat(74);
+        assert_eq!(InteractiveSelect::lines_needed_with_prefix(&label, 80, 6), 1);
+    }
+
+    #[test]
+    fn test_lines_needed_wide_chars() {
+        // CJK characters are 2 display columns each
+        // 40 CJK chars = 80 display columns = 1 line
+        let line = "你".repeat(40);
+        assert_eq!(InteractiveSelect::lines_needed(&line, 80), 1);
+    }
+
+    #[test]
+    fn test_lines_needed_emoji() {
+        // Emoji "🎉" is 4 bytes but 2 display columns
+        // 40 emoji = 80 display columns = 1 line
+        let line = "🎉".repeat(40);
+        assert_eq!(InteractiveSelect::lines_needed(&line, 80), 1);
     }
 }

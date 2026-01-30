@@ -54,6 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dialog menu line counting now handles Unicode correctly**
+
+  Previously, suggestions containing Unicode characters (emoji, CJK, etc.) could cause the menu to miscalculate its height, resulting in cursor positioning errors during navigation. Line counting now uses display width instead of byte length.
+
 - `Error: API error: Claude CLI failed with exit code 1` when using `provider = "claudecode"` and Claude Code is not configured in verbose mode. The `claude` command at the time of writing requires the `--verbose` option to be set when using the streaming output mode.
 
 ## v0.5.3 (2026-01-29)
