@@ -50,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Pressing `q`, `Esc`, or `Ctrl+C` to exit the suggestion menu now leaves the suggestions visible for reference instead of clearing them from the terminal.
 
+- The dialog menu (`frontend = "dialog"`) help line now uses color to distinguish keys from actions.
+
 ### Fixed
 
 - `Error: API error: Claude CLI failed with exit code 1` when using `provider = "claudecode"` and Claude Code is not configured in verbose mode. The `claude` command at the time of writing requires the `--verbose` option to be set when using the streaming output mode.

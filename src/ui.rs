@@ -186,8 +186,19 @@ impl InteractiveSelect {
         // Print help line
         write!(
             w,
-            "\r\n{}\r\n",
-            "↑↓/jk navigate • key/Enter select • Esc quit".dimmed()
+            "\r\n{}{}{} {} {} {}{}{} {} {} {} {}\r\n",
+            "↑↓".cyan(),
+            "/".dimmed(),
+            "jk".cyan(),
+            "navigate".dimmed(),
+            "•".dimmed(),
+            "key".cyan(),
+            "/".dimmed(),
+            "Enter".cyan(),
+            "select".dimmed(),
+            "•".dimmed(),
+            "Esc".cyan(),
+            "quit".dimmed(),
         )?;
 
         w.flush()?;
