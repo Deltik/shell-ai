@@ -90,10 +90,10 @@ impl InteractiveSelect {
         self
     }
 
-    /// Run the interactive selection and return the selected key.
+    /// Run the interactive selection and return the index of the selected option.
     ///
-    /// Returns `None` if the user cancelled (Escape/Ctrl+C).
-    pub fn run(&mut self) -> io::Result<Option<char>> {
+    /// Returns `None` if the user cancelled (Escape/Ctrl+C/q).
+    pub fn run(&mut self) -> io::Result<Option<usize>> {
         terminal::enable_raw_mode()?;
         let result = self.run_inner();
         terminal::disable_raw_mode()?;
@@ -104,7 +104,7 @@ impl InteractiveSelect {
         result
     }
 
-    fn run_inner(&mut self) -> io::Result<Option<char>> {
+    fn run_inner(&mut self) -> io::Result<Option<usize>> {
         let mut stderr = io::stderr();
         let mut first_render = true;
 
@@ -116,16 +116,16 @@ impl InteractiveSelect {
             // Wait for key event
             if let Event::Key(key_event) = event::read()? {
                 match self.handle_key(key_event) {
-                    KeyAction::Select(key) => {
-                        if key == 'q' {
-                            // Quit preserves display (same as Cancel)
+                    KeyAction::Select(idx) => {
+                        // Check if the selected option is a quit option (preserves display)
+                        if self.options.get(idx).map(|o| o.key) == Some('q') {
                             write!(stderr, "\r\n")?;
                             stderr.flush()?;
-                            return Ok(Some(key));
+                            return Ok(Some(idx));
                         }
                         // Clear the menu before returning
                         self.clear_menu(&mut stderr)?;
-                        return Ok(Some(key));
+                        return Ok(Some(idx));
                     }
                     KeyAction::Cancel => {
                         write!(stderr, "\r\n")?;
@@ -162,17 +162,22 @@ impl InteractiveSelect {
             KeyCode::Up | KeyCode::Char('k') => KeyAction::MoveUp,
             KeyCode::Down | KeyCode::Char('j') => KeyAction::MoveDown,
             KeyCode::Enter => {
-                if let Some(opt) = self.options.get(self.selected) {
-                    KeyAction::Select(opt.key)
+                if self.selected < self.options.len() {
+                    KeyAction::Select(self.selected)
                 } else {
                     KeyAction::None
                 }
             }
             KeyCode::Esc => KeyAction::Cancel,
             KeyCode::Char(c) => {
-                // Check if this character matches any option key
-                if let Some(opt) = self.options.iter().find(|o| o.key == c) {
-                    KeyAction::Select(opt.key)
+                // '?' is used as a display label for the 10th+ suggestion but
+                // is not an actionable shortcut — users navigate with arrows.
+                if c == '?' {
+                    return KeyAction::None;
+                }
+                // Check if this character matches any option key, return its index
+                if let Some(idx) = self.options.iter().position(|o| o.key == c) {
+                    KeyAction::Select(idx)
                 } else {
                     KeyAction::None
                 }
@@ -303,7 +308,7 @@ impl InteractiveSelect {
 }
 
 enum KeyAction {
-    Select(char),
+    Select(usize),
     Cancel,
     MoveUp,
     MoveDown,

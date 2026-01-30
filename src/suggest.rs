@@ -18,17 +18,132 @@ struct Suggestion {
     command: String,
 }
 
-// Command selection options (dialog mode)
-const SYSTEM_OPTION_GEN: &str = "Generate new suggestions";
-const SYSTEM_OPTION_NEW: &str = "Enter a new command";
-const SYSTEM_OPTION_DISMISS: &str = "Quit";
+/// Incremental extractor for the `command` value from streaming JSON.
+///
+/// Processes partial JSON chunks and outputs only the decoded string contents
+/// of the `"command"` key, stripping the `{"command":"…"}` wrapper.
+struct CommandExtractor {
+    state: ExtractState,
+    /// Position within the target key `"command"`
+    match_pos: usize,
+}
+
+#[derive(Clone, Copy)]
+enum ExtractState {
+    /// Looking for `"` that opens the key
+    Scanning,
+    /// Matching characters of `command"`
+    MatchingKey,
+    /// Found key, expecting `:`
+    ExpectColon,
+    /// Found `:`, expecting opening `"`
+    ExpectQuote,
+    /// Inside the string value, emitting characters
+    InValue,
+    /// Just saw `\` inside the value
+    Escape,
+    /// Closing `"` seen
+    Done,
+}
+
+/// The key name to match, including the closing `"`.
+/// E.g. for field `command`, this is `command"`.
+const EXTRACT_KEY: &[u8] = b"command\"";
+
+impl CommandExtractor {
+    fn new() -> Self {
+        // Exhaustive destructure: adding or removing fields from Suggestion
+        // will cause a compile error here, forcing an update to the extractor.
+        let _: fn(Suggestion) = |Suggestion { command: _ }| {};
+        Self { state: ExtractState::Scanning, match_pos: 0 }
+    }
+
+    /// Feed a chunk of streaming JSON, returns the extracted command text (if any).
+    fn feed(&mut self, chunk: &str) -> String {
+        let mut out = String::new();
+        for ch in chunk.chars() {
+            match self.state {
+                ExtractState::Scanning | ExtractState::MatchingKey => {
+                    if ch.is_ascii() && self.match_pos < EXTRACT_KEY.len()
+                        && EXTRACT_KEY[self.match_pos] == ch as u8
+                    {
+                        self.match_pos += 1;
+                        self.state = if self.match_pos == EXTRACT_KEY.len() {
+                            ExtractState::ExpectColon
+                        } else {
+                            ExtractState::MatchingKey
+                        };
+                    } else {
+                        // Mismatch — reset, but check if ch is an opening quote
+                        self.match_pos = 0;
+                        self.state = if ch == '"' { ExtractState::MatchingKey }
+                                     else { ExtractState::Scanning };
+                    }
+                }
+                ExtractState::ExpectColon => match ch {
+                    ':' => self.state = ExtractState::ExpectQuote,
+                    c if c.is_ascii_whitespace() => {}
+                    _ => { self.match_pos = 0; self.state = ExtractState::Scanning; }
+                },
+                ExtractState::ExpectQuote => match ch {
+                    '"' => self.state = ExtractState::InValue,
+                    c if c.is_ascii_whitespace() => {}
+                    _ => { self.match_pos = 0; self.state = ExtractState::Scanning; }
+                },
+                ExtractState::InValue => match ch {
+                    '"' => self.state = ExtractState::Done,
+                    '\\' => self.state = ExtractState::Escape,
+                    _ => out.push(ch),
+                },
+                ExtractState::Escape => {
+                    out.push(match ch {
+                        'n' => '\n',
+                        't' => '\t',
+                        'r' => '\r',
+                        _ => ch, // handles \", \\, \/, and passthrough
+                    });
+                    self.state = ExtractState::InValue;
+                }
+                ExtractState::Done => {}
+            }
+        }
+        out
+    }
+}
+
+// Command selection system options (dialog mode)
+#[derive(Clone, Copy, PartialEq)]
+enum SystemOption {
+    Generate,
+    NewPrompt,
+    Quit,
+}
+
+const SYSTEM_OPTIONS: &[(char, &str, SystemOption)] = &[
+    ('g', "Generate new suggestions", SystemOption::Generate),
+    ('n', "Enter a new command", SystemOption::NewPrompt),
+    ('q', "Quit", SystemOption::Quit),
+];
 
 // Action menu options (after selecting a command)
-const ACTION_COPY: &str = "Copy to clipboard";
-const ACTION_EXPLAIN: &str = "Explain command";
-const ACTION_EXECUTE: &str = "Execute command";
-const ACTION_REVISE: &str = "Revise command";
-const ACTION_EXIT: &str = "Quit";
+#[derive(Clone, Copy, PartialEq)]
+enum ActionOption {
+    Copy,
+    Explain,
+    Execute,
+    Revise,
+    Back,
+    Exit,
+}
+
+const ACTION_OPTIONS: &[(char, &str, ActionOption)] = &[
+    ('c', "Copy to clipboard", ActionOption::Copy),
+    ('e', "Explain command", ActionOption::Explain),
+    ('x', "Execute command", ActionOption::Execute),
+    ('r', "Revise command", ActionOption::Revise),
+    ('b', "Back to suggestions", ActionOption::Back),
+    ('q', "Quit", ActionOption::Exit),
+];
 
 /// JSON Schema for the `suggest` structured output.
 const SUGGEST_SCHEMA: &str = r#"{
@@ -129,22 +244,30 @@ async fn dialog_frontend(validated: &ValidatedConfig<'_>, initial_prompt: &str, 
 
         // Selection menu loop - allows returning here without regenerating
         'selection: loop {
-            // Build selection menu with numbered options and letter shortcuts
+            // Build selection menu with numbered options and system options
             let mut select = InteractiveSelect::new("Select a command:");
             for (i, s) in suggestions.iter().enumerate() {
                 let key = char::from_digit((i + 1) as u32, 10).unwrap_or('?');
                 select = select.option(key, &s.command);
             }
-            select = select
-                .option('g', SYSTEM_OPTION_GEN)
-                .option('n', SYSTEM_OPTION_NEW)
-                .option('q', SYSTEM_OPTION_DISMISS);
+            // System options follow the suggestions
+            let system_start_idx = suggestions.len();
+            for (key, label, _) in SYSTEM_OPTIONS {
+                select = select.option(*key, *label);
+            }
 
             let selection = select.run().map_err(|e| anyhow!("Selection error: {}", e))?;
 
-            match selection {
-                Some('q') | None => return Ok(()),
-                Some('n') => {
+            // Determine what was selected
+            let system_option = selection
+                .filter(|&idx| idx >= system_start_idx)
+                .and_then(|idx| SYSTEM_OPTIONS.get(idx - system_start_idx))
+                .map(|(_, _, opt)| *opt);
+
+            match (selection, system_option) {
+                (None, _) => return Ok(()), // Cancelled (Esc/Ctrl+C/q)
+                (_, Some(SystemOption::Quit)) => return Ok(()),
+                (_, Some(SystemOption::NewPrompt)) => {
                     if let Some(new_prompt) = TextInput::new("New prompt:")
                         .run()
                         .map_err(|e| anyhow!("Input error: {}", e))?
@@ -155,71 +278,64 @@ async fn dialog_frontend(validated: &ValidatedConfig<'_>, initial_prompt: &str, 
                     // User cancelled - stay on selection menu
                     continue 'selection;
                 }
-                Some('g') => continue 'outer, // Regenerate
-                Some(c) => {
-                    // Numeric selection
-                    if let Some(idx) = c.to_digit(10) {
-                        let idx = idx as usize;
-                        if idx >= 1 && idx <= suggestions.len() {
-                            let mut selected_command = suggestions[idx - 1].command.clone();
+                (_, Some(SystemOption::Generate)) => continue 'outer, // Regenerate
+                (Some(idx), None) if idx < suggestions.len() => {
+                    // Suggestion selected
+                    let mut selected_command = suggestions[idx].command.clone();
 
-                            // Action menu loop
-                            loop {
-                                println!();
-                                println!("Selected: {}", selected_command.green());
+                    // Action menu loop
+                    loop {
+                        println!();
+                        println!("Selected: {}", selected_command.green());
 
-                                let mut action_select = InteractiveSelect::new("Action:")
-                                    .option('c', ACTION_COPY)
-                                    .option('e', ACTION_EXPLAIN)
-                                    .option('x', ACTION_EXECUTE)
-                                    .option('r', ACTION_REVISE)
-                                    .option('b', "Back to suggestions")
-                                    .option('q', ACTION_EXIT);
+                        let mut action_select = InteractiveSelect::new("Action:");
+                        for (key, label, _) in ACTION_OPTIONS {
+                            action_select = action_select.option(*key, *label);
+                        }
 
-                                let action = action_select.run().map_err(|e| anyhow!("Selection error: {}", e))?;
+                        let action_idx = action_select.run().map_err(|e| anyhow!("Selection error: {}", e))?;
+                        let action = action_idx.and_then(|idx| ACTION_OPTIONS.get(idx)).map(|(_, _, opt)| *opt);
 
-                                match action {
-                                    Some('c') => {
-                                        ui::copy_to_clipboard(&selected_command);
-                                    }
-                                    Some('e') => {
-                                        if let Err(e) = explain::explain_command(&selected_command, validated).await {
-                                            log::error!("Failed to explain command: {}", e);
-                                        }
-                                    }
-                                    Some('x') => {
-                                        if !ctx_enabled {
-                                            run_command_default(&selected_command)?;
-                                            return Ok(());
-                                        } else {
-                                            handle_command_with_ctx(&selected_command, &mut ctx_buffer, &mut ctx_enabled)?;
-                                            println!(">>> {}", std::env::current_dir()?.display());
-                                            if let Some(new_prompt) = TextInput::new("New prompt:")
-                                                .run()
-                                                .map_err(|e| anyhow!("Input error: {}", e))?
-                                            {
-                                                prompt = new_prompt;
-                                            }
-                                            continue 'outer; // Regenerate after execute in ctx mode
-                                        }
-                                    }
-                                    Some('r') => {
-                                        if let Some(revised) = TextInput::new("Revise command:")
-                                            .with_initial_value(&selected_command)
-                                            .run()
-                                            .map_err(|e| anyhow!("Input error: {}", e))?
-                                        {
-                                            selected_command = revised;
-                                        }
-                                    }
-                                    Some('b') => continue 'selection, // Back to selection menu
-                                    Some('q') | None => return Ok(()),
-                                    _ => {}
+                        match action {
+                            Some(ActionOption::Copy) => {
+                                ui::copy_to_clipboard(&selected_command);
+                            }
+                            Some(ActionOption::Explain) => {
+                                if let Err(e) = explain::explain_command(&selected_command, validated).await {
+                                    log::error!("Failed to explain command: {}", e);
                                 }
                             }
+                            Some(ActionOption::Execute) => {
+                                if !ctx_enabled {
+                                    run_command_default(&selected_command)?;
+                                    return Ok(());
+                                } else {
+                                    handle_command_with_ctx(&selected_command, &mut ctx_buffer, &mut ctx_enabled)?;
+                                    println!(">>> {}", std::env::current_dir()?.display());
+                                    if let Some(new_prompt) = TextInput::new("New prompt:")
+                                        .run()
+                                        .map_err(|e| anyhow!("Input error: {}", e))?
+                                    {
+                                        prompt = new_prompt;
+                                    }
+                                    continue 'outer; // Regenerate after execute in ctx mode
+                                }
+                            }
+                            Some(ActionOption::Revise) => {
+                                if let Some(revised) = TextInput::new("Revise command:")
+                                    .with_initial_value(&selected_command)
+                                    .run()
+                                    .map_err(|e| anyhow!("Input error: {}", e))?
+                                {
+                                    selected_command = revised;
+                                }
+                            }
+                            Some(ActionOption::Back) => continue 'selection,
+                            Some(ActionOption::Exit) | None => return Ok(()),
                         }
                     }
                 }
+                _ => {} // Unknown selection, stay on menu
             }
         }
     }

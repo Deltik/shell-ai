@@ -58,6 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Previously, suggestions containing Unicode characters (emoji, CJK, etc.) could cause the menu to miscalculate its height, resulting in cursor positioning errors during navigation. Line counting now uses display width instead of byte length.
 
+- **Dialog mode now supports 10+ suggestions**
+
+  When `suggestion_count` exceeds 9, suggestions beyond the 9th are displayed with `?` as their shortcut key. Navigate to them with arrow keys and press Enter to select.
+
 - `Error: API error: Claude CLI failed with exit code 1` when using `provider = "claudecode"` and Claude Code is not configured in verbose mode. The `claude` command at the time of writing requires the `--verbose` option to be set when using the streaming output mode.
 
 ## v0.5.3 (2026-01-29)
