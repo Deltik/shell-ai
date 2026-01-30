@@ -368,9 +368,9 @@ async fn readline_frontend(validated: &ValidatedConfig<'_>, initial_prompt: &str
                 println!("  {}. {}", (i + 1).to_string().cyan(), s.command);
             }
             println!();
-            println!("  {}. {}", "g".cyan(), "Generate new suggestions");
-            println!("  {}. {}", "n".cyan(), "Enter new prompt");
-            println!("  {}. {}", "q".cyan(), "Quit");
+            println!("  {}. Generate new suggestions", "g".cyan());
+            println!("  {}. Enter new prompt", "n".cyan());
+            println!("  {}. Quit", "q".cyan());
             println!();
 
             print!("Select [1-{}/g/n/q]: ", suggestions.len());
@@ -403,12 +403,12 @@ async fn readline_frontend(validated: &ValidatedConfig<'_>, initial_prompt: &str
                         println!();
                         println!("Selected: {}", selected_command.green());
                         println!();
-                        println!("  {}. {}", "c".cyan(), "Copy to clipboard");
-                        println!("  {}. {}", "e".cyan(), "Explain command");
-                        println!("  {}. {}", "x".cyan(), "Execute command");
-                        println!("  {}. {}", "r".cyan(), "Revise command");
-                        println!("  {}. {}", "b".cyan(), "Back to selection");
-                        println!("  {}. {}", "q".cyan(), "Quit");
+                        println!("  {}. Copy to clipboard", "c".cyan());
+                        println!("  {}. Explain command", "e".cyan());
+                        println!("  {}. Execute command", "x".cyan());
+                        println!("  {}. Revise command", "r".cyan());
+                        println!("  {}. Back to selection", "b".cyan());
+                        println!("  {}. Quit", "q".cyan());
                         println!();
 
                         print!("Action [c/e/x/r/b/q]: ");
@@ -454,7 +454,7 @@ async fn readline_frontend(validated: &ValidatedConfig<'_>, initial_prompt: &str
                             "b" => {
                                 continue 'selection; // Back to selection menu
                             }
-                            "q" | _ => {
+                            _ => {
                                 return Ok(());
                             }
                         }
@@ -745,8 +745,8 @@ fn handle_command_with_ctx(
         return Ok(());
     }
 
-    if command.starts_with("cd ") {
-        let path = command[3..].trim();
+    if let Some(path) = command.strip_prefix("cd ") {
+        let path = path.trim();
         let expanded = shellexpand::tilde(path).into_owned();
         std::env::set_current_dir(expanded)?;
         return Ok(());

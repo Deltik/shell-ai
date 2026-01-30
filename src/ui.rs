@@ -263,8 +263,7 @@ impl InteractiveSelect {
                 if line.is_empty() {
                     1
                 } else {
-                    let width = line.width();
-                    (width + term_width - 1) / term_width // ceiling division
+                    line.width().div_ceil(term_width)
                 }
             })
             .sum()
@@ -285,12 +284,12 @@ impl InteractiveSelect {
         // First line includes prefix
         let first_line = lines.remove(0);
         let first_width = prefix_len + first_line.width();
-        total += if first_width == 0 { 1 } else { (first_width + term_width - 1) / term_width };
+        total += if first_width == 0 { 1 } else { first_width.div_ceil(term_width) };
 
         // Remaining lines have no prefix
         for line in lines {
             let width = line.width();
-            total += if width == 0 { 1 } else { (width + term_width - 1) / term_width };
+            total += if width == 0 { 1 } else { width.div_ceil(term_width) };
         }
 
         total
@@ -441,9 +440,7 @@ impl TextInput {
                     }
                     // Move left
                     (KeyCode::Left, _, _) | (KeyCode::Char('b'), true, _) => {
-                        if cursor_pos > 0 {
-                            cursor_pos -= 1;
-                        }
+                        cursor_pos = cursor_pos.saturating_sub(1);
                     }
                     // Move right
                     (KeyCode::Right, _, _) | (KeyCode::Char('f'), true, _) => {

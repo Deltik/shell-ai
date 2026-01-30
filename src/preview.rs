@@ -98,7 +98,7 @@ pub fn wrapped_line_count(s: &str, term_width: usize) -> usize {
             if width == 0 {
                 1
             } else {
-                (width + term_width - 1) / term_width
+                width.div_ceil(term_width)
             }
         })
         .sum();

@@ -887,14 +887,12 @@ fn env_to_json(builder: &mut ConfigBuilder) -> serde_json::Value {
 
     // Handle legacy SHAI_SKIP_CONFIRM
     if let Ok(v) = std::env::var(env::SHAI_SKIP_CONFIRM) {
-        if v.to_lowercase() == "true" {
-            if std::env::var(env::SHAI_FRONTEND).is_err() {
-                obj.insert(
-                    "frontend".to_string(),
-                    serde_json::Value::String("noninteractive".to_string()),
-                );
-                builder.record_env_var("frontend", env::SHAI_SKIP_CONFIRM);
-            }
+        if v.to_lowercase() == "true" && std::env::var(env::SHAI_FRONTEND).is_err() {
+            obj.insert(
+                "frontend".to_string(),
+                serde_json::Value::String("noninteractive".to_string()),
+            );
+            builder.record_env_var("frontend", env::SHAI_SKIP_CONFIRM);
         }
     }
 

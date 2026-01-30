@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
@@ -286,7 +286,7 @@ fn generate_header(
 "#,
         version = version,
         shell = shell.to_string(),
-        preset = preset.to_string(),
+        preset = preset,
         modifiers = modifiers,
     )
 }
@@ -435,7 +435,7 @@ fn generate_integration_file(
 }
 
 /// Replace home directory with $HOME for portable paths.
-fn path_with_home_var(path: &PathBuf) -> String {
+fn path_with_home_var(path: &Path) -> String {
     if let Some(home) = dirs::home_dir() {
         if let Ok(relative) = path.strip_prefix(&home) {
             return format!("$HOME/{}", relative.display());
@@ -445,7 +445,7 @@ fn path_with_home_var(path: &PathBuf) -> String {
 }
 
 /// Print sourcing instructions for the user.
-fn print_sourcing_instructions(shell: ShellType, path: &PathBuf) {
+fn print_sourcing_instructions(shell: ShellType, path: &Path) {
     let path_str = path_with_home_var(path);
 
     println!(

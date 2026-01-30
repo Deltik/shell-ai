@@ -145,7 +145,7 @@ impl Backend for OpenAiBackend {
                 ));
             }
 
-            if status < 200 || status >= 300 {
+            if !(200..300).contains(&status) {
                 let body = stream.read_body().unwrap_or_default().trim().to_string();
                 return Err(BackendError::ApiError(format!(
                     "HTTP {}: {}",
