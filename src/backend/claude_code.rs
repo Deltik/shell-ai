@@ -43,6 +43,7 @@ impl Backend for ClaudeCodeBackend {
             .arg("--output-format")
             .arg("stream-json")
             .arg("--include-partial-messages")
+            .arg("--verbose")
             .arg("--debug-file")
             .arg("/dev/null")
             .arg("--no-session-persistence")
