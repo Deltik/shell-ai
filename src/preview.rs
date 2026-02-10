@@ -40,6 +40,113 @@ const PERFORATION_CHAR: char = '┄';
 const CHROME_LINES: usize = 3;
 
 // ============================================================================
+// Progress Header
+// ============================================================================
+
+/// Thinking phase for the progress header.
+pub enum ThinkingPhase {
+    /// No preamble received.
+    None,
+    /// Currently receiving preamble text.
+    Active,
+    /// Thinking finished, show duration.
+    Done { secs: f64 },
+}
+
+/// Write text with waving color flourish in cyan.
+/// The wave travels linearly (no wrap-around), so the highlight fades in from
+/// the left, traverses the text, fades out to the right, then pauses briefly
+/// before the next cycle. `pos` can be negative (wave approaching from left).
+fn write_flourish(buffer: &mut VirtualBuffer, text: &str, pos: isize) {
+    let chars: Vec<char> = text.chars().collect();
+    for (j, &ch) in chars.iter().enumerate() {
+        let dist = (j as isize - pos).unsigned_abs();
+
+        let style = if dist == 0 {
+            // \033[1;96m — bold + bright cyan
+            Style {
+                bold: true,
+                fg: Some(Color::BrightCyan),
+                ..Default::default()
+            }
+        } else if dist <= 2 {
+            // \033[0;36m — normal cyan
+            Style::fg(Color::Cyan)
+        } else {
+            // \033[2;36m — dim cyan
+            Style {
+                dim: true,
+                fg: Some(Color::Cyan),
+                ..Default::default()
+            }
+        };
+        buffer.set_style(style);
+        buffer.write_char(ch);
+    }
+    buffer.reset_style();
+}
+
+/// Write "thinking" with a pulsing dim/bold effect.
+fn write_thinking_pulse(buffer: &mut VirtualBuffer, frame: usize) {
+    // 8-frame cycle: dim dim default default bold bold default default
+    let style = match frame % 8 {
+        0 | 1 => Style::dim(),
+        4 | 5 => Style {
+            bold: true,
+            ..Default::default()
+        },
+        _ => Style::default(),
+    };
+    buffer.set_style(style);
+    buffer.write_str("thinking");
+    buffer.set_style(Style::dim()); // restore dim for closing paren
+}
+
+/// Write the progress header line.
+/// `label` is "Suggesting…" or "Explaining…".
+/// `metadata_items` are `·`-separated entries inside parentheses.
+fn write_progress_header(
+    buffer: &mut VirtualBuffer,
+    spinner_idx: usize,
+    label: &str,
+    metadata_items: &[String],
+) {
+    // Spinner (cyan)
+    let spinner = SPINNER_CHARS[spinner_idx % SPINNER_CHARS.len()];
+    buffer.set_style(Style::fg(Color::Cyan));
+    buffer.write_char(spinner);
+    buffer.reset_style();
+    buffer.write_char(' ');
+
+    // Label with waving flourish.
+    // Cycle = label_len + 6: 2 entry frames (wave fading in from left) +
+    // label_len traversal frames + 2 exit frames (tail fading off right) +
+    // 2 fully dark frames. Effective position is offset by -2 so the wave
+    // starts approaching from beyond the left edge.
+    let label_len = label.chars().count();
+    let cycle_len = label_len + 6;
+    let wave_pos = (spinner_idx % cycle_len) as isize - 2;
+    write_flourish(buffer, label, wave_pos);
+
+    // Space + parenthesized metadata (dim)
+    buffer.write_char(' ');
+    buffer.set_style(Style::dim());
+    buffer.write_char('(');
+    for (i, item) in metadata_items.iter().enumerate() {
+        if i > 0 {
+            buffer.write_str(" \u{00b7} ");
+        }
+        if item == "thinking" {
+            write_thinking_pulse(buffer, spinner_idx);
+        } else {
+            buffer.write_str(item);
+        }
+    }
+    buffer.write_char(')');
+    buffer.reset_style();
+}
+
+// ============================================================================
 // Line Wrapping Utilities (Pure Functions)
 // ============================================================================
 
@@ -168,7 +275,6 @@ pub fn truncate_string(s: &str, max_width: usize) -> TruncatedString {
 // ============================================================================
 
 /// Configuration for StreamingPreview rendering.
-#[derive(Debug, Clone)]
 pub struct ExplainPreviewConfig {
     pub term_width: usize,
     pub term_height: usize,
@@ -180,6 +286,8 @@ pub struct ExplainPreviewConfig {
     pub status: Option<String>,
     /// Maximum preview display mode from user settings.
     pub max_preview_mode: PreviewMode,
+    /// Current thinking/preamble phase.
+    pub thinking: ThinkingPhase,
 }
 
 /// Determine the appropriate display mode for explain based on content and terminal size.
@@ -212,50 +320,21 @@ fn render_explain_to_buffer(
     let display_mode = determine_explain_display_mode(config);
 
     // Row 0: Header (chrome)
-    let term_width = config.term_width;
-    let write_char_clipped = |buf: &mut VirtualBuffer, ch: char| {
-        let char_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if char_width == 0 {
-            return;
-        }
-        if buf.cursor_col() + char_width > term_width {
-            return;
-        }
-        buf.write_char(ch);
-    };
-    let write_str_clipped = |buf: &mut VirtualBuffer, s: &str| {
-        for ch in s.chars() {
-            let char_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-            if char_width == 0 {
-                continue;
-            }
-            if buf.cursor_col() + char_width > term_width {
-                break;
-            }
-            buf.write_char(ch);
-        }
-    };
-
-    let spinner = SPINNER_CHARS[config.spinner_idx % SPINNER_CHARS.len()];
-    buffer.set_style(Style::fg(Color::Cyan));
-    write_char_clipped(&mut buffer, spinner);
-    buffer.reset_style();
-    write_str_clipped(&mut buffer, " Generating explanation... ");
-
+    let mut metadata = vec![
+        format!("{:.1}s", config.elapsed_secs),
+        format!("{} chars", config.char_count),
+    ];
     if let Some(ref status) = config.status {
-        buffer.set_style(Style::fg(Color::Yellow));
-        write_str_clipped(&mut buffer, status);
-        buffer.reset_style();
-        write_str_clipped(&mut buffer, " | ");
+        metadata.push(status.clone());
     }
-
-    buffer.set_style(Style::dim());
-    write_str_clipped(&mut buffer, &format!("{} tokens", config.token_count));
-    buffer.reset_style();
-    write_str_clipped(&mut buffer, " | ");
-    buffer.set_style(Style::dim());
-    write_str_clipped(&mut buffer, &format!("{:.1}s", config.elapsed_secs));
-    buffer.reset_style();
+    match &config.thinking {
+        ThinkingPhase::Active => metadata.push("thinking".to_string()),
+        ThinkingPhase::Done { secs } => {
+            metadata.push(format!("thought for {}s", *secs as u64));
+        }
+        ThinkingPhase::None => {}
+    }
+    write_progress_header(&mut buffer, config.spinner_idx, "Explaining\u{2026}", &metadata);
 
     regions.push(Region::new(0, 1));
 
@@ -448,6 +527,12 @@ pub struct StreamingPreview {
     last_render: Instant,
     /// Maximum preview display mode from user settings.
     max_preview_mode: PreviewMode,
+    /// Whether currently receiving preamble text.
+    is_thinking: Arc<Mutex<bool>>,
+    /// When the current thinking phase started.
+    thinking_start: Arc<Mutex<Option<Instant>>>,
+    /// Accumulated thinking duration in seconds.
+    thinking_total_secs: Arc<Mutex<f64>>,
 }
 
 impl StreamingPreview {
@@ -467,6 +552,9 @@ impl StreamingPreview {
             spinner_idx: 0,
             last_render: Instant::now(),
             max_preview_mode,
+            is_thinking: Arc::new(Mutex::new(false)),
+            thinking_start: Arc::new(Mutex::new(None)),
+            thinking_total_secs: Arc::new(Mutex::new(0.0)),
         }))
     }
 
@@ -485,6 +573,21 @@ impl StreamingPreview {
         Arc::clone(&self.status)
     }
 
+    /// Get a clone of the is_thinking Arc for use in callbacks.
+    pub fn is_thinking_handle(&self) -> Arc<Mutex<bool>> {
+        Arc::clone(&self.is_thinking)
+    }
+
+    /// Get a clone of the thinking_start Arc for use in callbacks.
+    pub fn thinking_start_handle(&self) -> Arc<Mutex<Option<Instant>>> {
+        Arc::clone(&self.thinking_start)
+    }
+
+    /// Get a clone of the thinking_total_secs Arc for use in callbacks.
+    pub fn thinking_total_secs_handle(&self) -> Arc<Mutex<f64>> {
+        Arc::clone(&self.thinking_total_secs)
+    }
+
     /// Get the current chunks.
     pub fn get_chunks(&self) -> Vec<StreamChunk> {
         self.chunks.lock().map(|c| c.clone()).unwrap_or_default()
@@ -501,10 +604,10 @@ impl StreamingPreview {
     }
 
     /// Render the current preview state.
-    /// Rate-limited to ~10 renders/second.
+    /// Rate-limited to ~12.5 renders/second (80ms).
     pub fn render(&mut self) -> io::Result<()> {
         let now = Instant::now();
-        if now.duration_since(self.last_render).as_millis() < 100 {
+        if now.duration_since(self.last_render).as_millis() < 80 {
             return Ok(());
         }
         self.last_render = now;
@@ -519,6 +622,17 @@ impl StreamingPreview {
             return Ok(());
         }
 
+        // Compute thinking phase
+        let is_thinking = self.is_thinking.lock().map(|t| *t).unwrap_or(false);
+        let total_secs = self.thinking_total_secs.lock().map(|t| *t).unwrap_or(0.0);
+        let thinking = if is_thinking {
+            ThinkingPhase::Active
+        } else if total_secs > 0.0 {
+            ThinkingPhase::Done { secs: total_secs }
+        } else {
+            ThinkingPhase::None
+        };
+
         let config = ExplainPreviewConfig {
             term_width: width as usize,
             term_height: drawable_height as usize,
@@ -527,6 +641,7 @@ impl StreamingPreview {
             char_count: self.get_char_count(),
             status: self.get_status(),
             max_preview_mode: self.max_preview_mode,
+            thinking,
         };
         self.spinner_idx = self.spinner_idx.wrapping_add(1);
 
@@ -672,7 +787,6 @@ fn render_suggest_to_buffer(
     let mut buffer = VirtualBuffer::new(width, height);
     let mut regions = Vec::new();
 
-    let spinner = SPINNER_CHARS[config.spinner_idx % SPINNER_CHARS.len()];
     let display_mode = determine_display_mode(slots, config);
 
     let pending_count = slots.iter().filter(|s| s.is_pending_or_streaming()).count();
@@ -681,37 +795,33 @@ fn render_suggest_to_buffer(
     match display_mode {
         DisplayMode::Minimal => {
             // Single line header
-            buffer.set_style(Style::fg(Color::Cyan));
-            buffer.write_char(spinner);
-            buffer.reset_style();
-            buffer.write_str(&format!(
-                " Generating suggestions... {}/{} pending | ",
-                pending_count,
-                slots.len()
-            ));
-            buffer.set_style(Style::dim());
-            buffer.write_str(&format!("{} tokens", total_tokens));
-            buffer.reset_style();
-            buffer.write_str(" | ");
-            buffer.set_style(Style::dim());
-            buffer.write_str(&format!("{:.1}s", config.elapsed_secs));
-            buffer.reset_style();
+            let metadata = vec![
+                format!("{:.1}s", config.elapsed_secs),
+                format!("{} chars", total_chars),
+                format!("{}/{} pending", pending_count, slots.len()),
+            ];
+            write_progress_header(
+                &mut buffer,
+                config.spinner_idx,
+                "Suggesting\u{2026}",
+                &metadata,
+            );
 
             regions.push(Region::new(0, 1));
         }
         DisplayMode::Compact | DisplayMode::Full => {
             // Row 0: Header (chrome)
-            buffer.set_style(Style::fg(Color::Cyan));
-            buffer.write_char(spinner);
-            buffer.reset_style();
-            buffer.write_str(&format!(" Generating {} suggestions... ", slots.len()));
-            buffer.set_style(Style::dim());
-            buffer.write_str(&format!("{} tokens", total_tokens));
-            buffer.reset_style();
-            buffer.write_str(" | ");
-            buffer.set_style(Style::dim());
-            buffer.write_str(&format!("{:.1}s", config.elapsed_secs));
-            buffer.reset_style();
+            let metadata = vec![
+                format!("{:.1}s", config.elapsed_secs),
+                format!("{} chars", total_chars),
+                format!("{} suggestions", slots.len()),
+            ];
+            write_progress_header(
+                &mut buffer,
+                config.spinner_idx,
+                "Suggesting\u{2026}",
+                &metadata,
+            );
 
             regions.push(Region::new(0, 1));
 
@@ -1004,9 +1114,10 @@ impl SuggestProgress {
     }
 
     /// Render the current progress state.
+    /// Rate-limited to ~12.5 renders/second (80ms).
     pub fn render(&mut self) -> io::Result<()> {
         let now = Instant::now();
-        if now.duration_since(self.last_render).as_millis() < 100 {
+        if now.duration_since(self.last_render).as_millis() < 80 {
             return Ok(());
         }
         self.last_render = now;
@@ -1433,6 +1544,7 @@ mod tests {
             char_count: 0,
             status: None,
             max_preview_mode: PreviewMode::Full,
+            thinking: ThinkingPhase::None,
         };
         let (buffer, regions) = render_explain_to_buffer(&[], &config);
 
@@ -1455,6 +1567,7 @@ mod tests {
             char_count: 10,
             status: None,
             max_preview_mode: PreviewMode::Full,
+            thinking: ThinkingPhase::None,
         };
         let chunks = vec![
             StreamChunk { chunk_type: ChunkType::Content, text: "test content".to_string() },
@@ -1480,18 +1593,21 @@ mod tests {
     #[test]
     fn test_render_explain_truncation_preserves_separators() {
         let config = ExplainPreviewConfig {
-            term_width: 8,
+            term_width: 40,
             term_height: 5,
             elapsed_secs: 1.0,
             spinner_idx: 0,
             char_count: 10,
             status: None,
             max_preview_mode: PreviewMode::Full,
+            thinking: ThinkingPhase::None,
         };
+        // Content must exceed available_lines (term_height - CHROME_LINES = 2)
+        // at this width, so >80 chars to wrap to 3+ lines.
         let chunks = vec![
             StreamChunk {
                 chunk_type: ChunkType::Content,
-                text: "abcdefghijklmnopqrst".to_string(), // long enough to truncate
+                text: "a".repeat(100), // wraps to 3 lines at width 40, triggers truncation
             },
         ];
         let (buffer, regions) = render_explain_to_buffer(&chunks, &config);
@@ -1518,6 +1634,54 @@ mod tests {
         let bottom_right = &bottom_row_cells[5];
         assert_eq!(bottom_left.ch, Some('┤'));
         assert_eq!(bottom_right.ch, Some('├'));
+    }
+
+    #[test]
+    fn test_render_explain_tiny_terminal_wraps_header() {
+        // On very narrow terminals, the header wraps into subsequent rows
+        // instead of clipping. Verify this doesn't panic and produces output.
+        let config = ExplainPreviewConfig {
+            term_width: 8,
+            term_height: 10,
+            elapsed_secs: 1.0,
+            spinner_idx: 0,
+            char_count: 10,
+            status: None,
+            max_preview_mode: PreviewMode::Full,
+            thinking: ThinkingPhase::None,
+        };
+        let chunks = vec![StreamChunk {
+            chunk_type: ChunkType::Content,
+            text: "hello".to_string(),
+        }];
+        let (buffer, regions) = render_explain_to_buffer(&chunks, &config);
+
+        // Header should start on row 0
+        let first_cell = &buffer.row(0).unwrap().cells[0];
+        assert_eq!(first_cell.ch, Some(SPINNER_CHARS[0]));
+
+        // Should still produce regions
+        assert!(!regions.is_empty());
+    }
+
+    #[test]
+    fn test_render_suggest_tiny_terminal_wraps_header() {
+        let config = SuggestPreviewConfig {
+            term_width: 8,
+            term_height: 10,
+            elapsed_secs: 1.0,
+            spinner_idx: 0,
+            max_preview_mode: PreviewMode::Full,
+        };
+        let slots = vec![SlotState::Pending, SlotState::Pending];
+        let (buffer, regions) = render_suggest_to_buffer(&slots, &config);
+
+        // Header should start on row 0
+        let first_cell = &buffer.row(0).unwrap().cells[0];
+        assert_eq!(first_cell.ch, Some(SPINNER_CHARS[0]));
+
+        // Should still produce regions
+        assert!(!regions.is_empty());
     }
 
     #[test]

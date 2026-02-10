@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::backend::{Backend, BackendError, CompletionRequest, StreamCallback, StreamEvent};
 use crate::config::{resolve_locale, OutputFormat, ValidatedConfig};
@@ -481,6 +481,9 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
             let chunks_handle = preview.chunks_handle();
             let char_count_handle = preview.char_count_handle();
             let status_handle = preview.status_handle();
+            let is_thinking_handle = preview.is_thinking_handle();
+            let thinking_start_handle = preview.thinking_start_handle();
+            let thinking_total_secs_handle = preview.thinking_total_secs_handle();
 
             let callback: StreamCallback = Box::new(move |event| {
                 use crate::preview::{append_chunk, ChunkType};
@@ -497,6 +500,21 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
                         if let Ok(mut count) = char_count_handle.lock() {
                             *count += text_chars;
                         }
+                        // Transition out of thinking
+                        if let Ok(mut thinking) = is_thinking_handle.lock() {
+                            if *thinking {
+                                *thinking = false;
+                                if let Ok(mut start) = thinking_start_handle.lock() {
+                                    if let Some(s) = start.take() {
+                                        if let Ok(mut total) =
+                                            thinking_total_secs_handle.lock()
+                                        {
+                                            *total += s.elapsed().as_secs_f64();
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     StreamEvent::Preamble(text) => {
                         // Clear status when we start receiving content (retry succeeded)
@@ -509,6 +527,15 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
                         }
                         if let Ok(mut count) = char_count_handle.lock() {
                             *count += text_chars;
+                        }
+                        // Mark thinking as active
+                        if let Ok(mut thinking) = is_thinking_handle.lock() {
+                            if !*thinking {
+                                *thinking = true;
+                                if let Ok(mut start) = thinking_start_handle.lock() {
+                                    *start = Some(Instant::now());
+                                }
+                            }
                         }
                     }
                     StreamEvent::Backoff { attempt, delay_ms } => {

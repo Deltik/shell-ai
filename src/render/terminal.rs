@@ -488,6 +488,7 @@ impl TerminalRenderer {
                 Color::Green => codes.push(32),
                 Color::Yellow => codes.push(33),
                 Color::Cyan => codes.push(36),
+                Color::BrightCyan => codes.push(96),
             }
         }
 
@@ -497,6 +498,7 @@ impl TerminalRenderer {
                 Color::Green => codes.push(42),
                 Color::Yellow => codes.push(43),
                 Color::Cyan => codes.push(46),
+                Color::BrightCyan => codes.push(106),
             }
         }
 

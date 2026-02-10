@@ -62,6 +62,7 @@ pub enum Color {
     Green,
     Yellow,
     Cyan,
+    BrightCyan,
 }
 
 /// A single cell in the virtual buffer.
