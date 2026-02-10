@@ -770,14 +770,14 @@ _shai_transform() {
         { shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null > "$tmpfile" & } 2>/dev/null
         pid=$!
 
-        local pos=0
+        local frame=0
+        local cycle=$(( len + 6 ))
         while kill -0 $pid 2>/dev/null; do
+            local pos=$(( frame % cycle - 2 ))
             local highlighted=""
             for ((j=0; j<len; j++)); do
                 local dist=$(( j - pos ))
                 (( dist < 0 )) && dist=$(( -dist ))
-                local wrap_dist=$(( len - dist ))
-                (( pos > 2 && wrap_dist < dist )) && dist=$wrap_dist
                 if (( dist == 0 )); then
                     highlighted+="\033[1;96m${original:j:1}"
                 elif (( dist <= 2 )); then
@@ -786,9 +786,9 @@ _shai_transform() {
                     highlighted+="\033[2;36m${original:j:1}"
                 fi
             done
-            printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' "${spinner[pos % ${#spinner[@]}]}" "$highlighted"
+            printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' "${spinner[frame % ${#spinner[@]}]}" "$highlighted"
             sleep 0.08
-            pos=$(( (pos + 1) % len ))
+            frame=$(( frame + 1 ))
         done
 
         trap - INT TERM
@@ -825,14 +825,14 @@ _shai_transform() {
         (shell-ai --frontend=noninteractive suggest -- "$original" 2>/dev/null > "$tmpfile") &!
         pid=$!
 
-        local pos=0
+        local frame=0
+        local cycle=$(( len + 6 ))
         while kill -0 $pid 2>/dev/null; do
+            local pos=$(( frame % cycle - 2 ))
             local highlighted=""
             for ((j=1; j<=len; j++)); do
                 local dist=$(( j - 1 - pos ))
                 (( dist < 0 )) && dist=$(( -dist ))
-                local wrap_dist=$(( len - dist ))
-                (( pos > 2 && wrap_dist < dist )) && dist=$wrap_dist
                 if (( dist == 0 )); then
                     highlighted+="\033[1;96m${original[j]}"
                 elif (( dist <= 2 )); then
@@ -841,9 +841,9 @@ _shai_transform() {
                     highlighted+="\033[2;36m${original[j]}"
                 fi
             done
-            printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' "${spinner[pos % ${#spinner[@]} + 1]}" "$highlighted"
+            printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' "${spinner[frame % ${#spinner[@]} + 1]}" "$highlighted"
             sleep 0.08
-            pos=$(( (pos + 1) % len ))
+            frame=$(( frame + 1 ))
         done
 
         BUFFER=$(< "$tmpfile")
@@ -886,13 +886,13 @@ function _shai_transform
     sh -c 'shell-ai --frontend=noninteractive suggest -- "$1" 2>/dev/null > "$2"' _ "$cmd" "$__shai_tmp" &
     set __shai_pid $last_pid
 
-    set -l pos 0
+    set -l frame 0
+    set -l cycle (math "$len + 6")
     while kill -0 $__shai_pid 2>/dev/null; and test $__shai_cancelled -eq 0
+        set -l pos (math "$frame % $cycle - 2")
         set -l highlighted ""
         for j in (seq $len)
             set -l dist (math "abs($j - 1 - $pos)")
-            set -l wrap_dist (math "$len - $dist")
-            test $pos -gt 2 -a $wrap_dist -lt $dist; and set dist $wrap_dist
             if test $dist -eq 0
                 set highlighted "$highlighted"\e"[1;96m"(string sub -s $j -l 1 "$cmd")
             else if test $dist -le 2
@@ -901,9 +901,9 @@ function _shai_transform
                 set highlighted "$highlighted"\e"[2;36m"(string sub -s $j -l 1 "$cmd")
             end
         end
-        printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' $spinner[(math "$pos % 10 + 1")] "$highlighted"
+        printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' $spinner[(math "$frame % 10 + 1")] "$highlighted"
         sleep 0.08 &; wait $last_pid; or break
-        set pos (math "($pos + 1) % $len")
+        set frame (math "$frame + 1")
     end
 
     functions -e __shai_cancel
@@ -943,7 +943,8 @@ Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
             shell-ai --frontend=noninteractive suggest -- $l 2>$null
         } -ArgumentList $line
 
-        $pos = 0
+        $frame = 0
+        $cycle = $len + 6
         while ($job.State -eq 'Running') {
             if ([Console]::KeyAvailable) {
                 $key = [Console]::ReadKey($true)
@@ -952,11 +953,10 @@ Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
                     break
                 }
             }
+            $pos = $frame % $cycle - 2
             $highlighted = ""
             for ($j = 0; $j -lt $len; $j++) {
                 $dist = [Math]::Abs($j - $pos)
-                $wrapDist = $len - $dist
-                if ($pos -gt 2 -and $wrapDist -lt $dist) { $dist = $wrapDist }
                 if ($dist -eq 0) {
                     $highlighted += "`e[1;96m$($line[$j])"
                 } elseif ($dist -le 2) {
@@ -965,10 +965,10 @@ Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
                     $highlighted += "`e[2;36m$($line[$j])"
                 }
             }
-            $spin = $spinner[$pos % $spinner.Length]
+            $spin = $spinner[$frame % $spinner.Length]
             [Console]::Write("`r`e[K`e[1;36m$spin`e[0m $highlighted`e[0m")
             Start-Sleep -Milliseconds 80
-            $pos = ($pos + 1) % $len
+            $frame++
         }
 
         if ($cancelled) {

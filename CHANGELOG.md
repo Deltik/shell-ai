@@ -52,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The dialog menu (`frontend = "dialog"`) help line now uses color to distinguish keys from actions.
 
+- **Ctrl+G shimmer animation pauses briefly between cycles** instead of wrapping continuously so that it's less attention-grabbing. The wave highlight now fades in from the left, traverses the text, fades out to the right, and rests for two dark frames before repeating. This applies to all shell integrations (Bash, Zsh, Fish, PowerShell).
+
 ### Fixed
 
 - **Dialog menu line counting now handles Unicode correctly**
