@@ -369,10 +369,18 @@ impl TextInput {
         self.run_inner()
     }
 
+    /// Convert a char index to a byte offset in the string.
+    fn char_to_byte(s: &str, char_idx: usize) -> usize {
+        s.char_indices()
+            .nth(char_idx)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len())
+    }
+
     fn run_inner(&self) -> io::Result<Option<String>> {
         let mut stderr = io::stderr();
         let mut input = self.initial_value.clone();
-        let mut cursor_pos = input.len();
+        let mut cursor_pos = input.chars().count(); // char index, not byte offset
 
         loop {
             // Render prompt and current input
@@ -383,9 +391,11 @@ impl TextInput {
             )?;
             write!(stderr, "{} {}", self.prompt.cyan(), input)?;
 
-            // Position cursor
-            let prompt_len = self.prompt.len() + 1; // +1 for space
-            execute!(stderr, cursor::MoveToColumn((prompt_len + cursor_pos) as u16))?;
+            // Position cursor using display widths
+            let prompt_width = UnicodeWidthStr::width(self.prompt.as_str()) + 1; // +1 for space
+            let byte_offset = Self::char_to_byte(&input, cursor_pos);
+            let input_width = UnicodeWidthStr::width(&input[..byte_offset]);
+            execute!(stderr, cursor::MoveToColumn((prompt_width + input_width) as u16))?;
             stderr.flush()?;
 
             // Wait for key event
@@ -411,27 +421,33 @@ impl TextInput {
                     }
                     // End of line: Ctrl+E or End
                     (KeyCode::Char('e'), true, _) | (KeyCode::End, _, _) => {
-                        cursor_pos = input.len();
+                        cursor_pos = input.chars().count();
                     }
                     // Kill to beginning: Ctrl+U
                     (KeyCode::Char('u'), true, _) => {
-                        input.drain(..cursor_pos);
+                        let byte_off = Self::char_to_byte(&input, cursor_pos);
+                        input.drain(..byte_off);
                         cursor_pos = 0;
                     }
                     // Kill to end: Ctrl+K
                     (KeyCode::Char('k'), true, _) => {
-                        input.truncate(cursor_pos);
+                        let byte_off = Self::char_to_byte(&input, cursor_pos);
+                        input.truncate(byte_off);
                     }
                     // Delete word backward: Ctrl+W or Alt+Backspace
                     (KeyCode::Char('w'), true, _) | (KeyCode::Backspace, _, true) => {
                         let new_pos = find_word_boundary_backward(&input, cursor_pos);
-                        input.drain(new_pos..cursor_pos);
+                        let start = Self::char_to_byte(&input, new_pos);
+                        let end = Self::char_to_byte(&input, cursor_pos);
+                        input.drain(start..end);
                         cursor_pos = new_pos;
                     }
                     // Delete word forward: Alt+D
                     (KeyCode::Char('d'), _, true) => {
                         let end_pos = find_word_boundary_forward(&input, cursor_pos);
-                        input.drain(cursor_pos..end_pos);
+                        let start = Self::char_to_byte(&input, cursor_pos);
+                        let end = Self::char_to_byte(&input, end_pos);
+                        input.drain(start..end);
                     }
                     // Move word backward: Ctrl+Left or Alt+B
                     (KeyCode::Left, true, _) | (KeyCode::Char('b'), _, true) => {
@@ -444,14 +460,16 @@ impl TextInput {
                     // Simple backspace
                     (KeyCode::Backspace, _, _) => {
                         if cursor_pos > 0 {
-                            input.remove(cursor_pos - 1);
+                            let byte_off = Self::char_to_byte(&input, cursor_pos - 1);
+                            input.remove(byte_off);
                             cursor_pos -= 1;
                         }
                     }
                     // Delete
                     (KeyCode::Delete, _, _) | (KeyCode::Char('d'), true, _) => {
-                        if cursor_pos < input.len() {
-                            input.remove(cursor_pos);
+                        if cursor_pos < input.chars().count() {
+                            let byte_off = Self::char_to_byte(&input, cursor_pos);
+                            input.remove(byte_off);
                         }
                     }
                     // Move left
@@ -460,13 +478,14 @@ impl TextInput {
                     }
                     // Move right
                     (KeyCode::Right, _, _) | (KeyCode::Char('f'), true, _) => {
-                        if cursor_pos < input.len() {
+                        if cursor_pos < input.chars().count() {
                             cursor_pos += 1;
                         }
                     }
                     // Regular character input
                     (KeyCode::Char(c), false, false) => {
-                        input.insert(cursor_pos, c);
+                        let byte_off = Self::char_to_byte(&input, cursor_pos);
+                        input.insert(byte_off, c);
                         cursor_pos += 1;
                     }
                     _ => {}
@@ -476,40 +495,42 @@ impl TextInput {
     }
 }
 
-/// Find the position of the previous word boundary (for backward word operations).
+/// Find the char-index of the previous word boundary (for backward word operations).
+/// Accepts and returns char indices (not byte offsets).
 fn find_word_boundary_backward(s: &str, from: usize) -> usize {
     if from == 0 {
         return 0;
     }
-    let bytes = s.as_bytes();
+    let chars: Vec<char> = s.chars().collect();
     let mut pos = from;
 
     // Skip any whitespace immediately before cursor
-    while pos > 0 && bytes[pos - 1].is_ascii_whitespace() {
+    while pos > 0 && chars[pos - 1].is_ascii_whitespace() {
         pos -= 1;
     }
     // Skip the word (non-whitespace)
-    while pos > 0 && !bytes[pos - 1].is_ascii_whitespace() {
+    while pos > 0 && !chars[pos - 1].is_ascii_whitespace() {
         pos -= 1;
     }
     pos
 }
 
-/// Find the position of the next word boundary (for forward word operations).
+/// Find the char-index of the next word boundary (for forward word operations).
+/// Accepts and returns char indices (not byte offsets).
 fn find_word_boundary_forward(s: &str, from: usize) -> usize {
-    let len = s.len();
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
     if from >= len {
         return len;
     }
-    let bytes = s.as_bytes();
     let mut pos = from;
 
     // Skip current word (non-whitespace)
-    while pos < len && !bytes[pos].is_ascii_whitespace() {
+    while pos < len && !chars[pos].is_ascii_whitespace() {
         pos += 1;
     }
     // Skip whitespace after the word
-    while pos < len && bytes[pos].is_ascii_whitespace() {
+    while pos < len && chars[pos].is_ascii_whitespace() {
         pos += 1;
     }
     pos

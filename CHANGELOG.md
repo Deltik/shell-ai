@@ -75,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Error: API error: Claude CLI failed with exit code 1` when using `provider = "claudecode"` and Claude Code is not configured in verbose mode. The `claude` command at the time of writing requires the `--verbose` option to be set when using the streaming output mode.
 
+- Text input now handles multi-byte Unicode correctly. The cursor, word boundaries, backspace, delete, and kill operations now track char indices instead of byte offsets. Cursor positioning uses display width for correct alignment with CJK and other wide characters.
+
 - Terminal raw mode is now restored on panic. A RAII `Drop` guard ensures `disable_raw_mode()` runs even if the interactive select or text input panics, preventing the terminal from being left in a broken state.
 
 - `shell-ai explain` no longer panics when truncating multi-byte UTF-8 content. The `truncate_to_limit` function now finds a valid char boundary instead of slicing at a byte offset.
