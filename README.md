@@ -49,7 +49,7 @@ Download prebuilt binaries from the [Releases page](https://github.com/Deltik/sh
 
 ```bash
 cargo install shell-ai
-ln -v -s shell-ai ~/.cargo/bin/shai
+ln -v -s shell-ai ~/.cargo/bin/shai  # Optional: shorthand alias for `shell-ai suggest`
 ```
 
 ### From Source
@@ -59,7 +59,7 @@ git clone https://github.com/Deltik/shell-ai
 cd shell-ai
 cargo install --path .
 # Installs to ~/.cargo/bin/shell-ai
-ln -v -s shell-ai ~/.cargo/bin/shai
+ln -v -s shell-ai ~/.cargo/bin/shai  # Optional: shorthand alias for `shell-ai suggest`
 ```
 
 ## Features
@@ -68,8 +68,9 @@ ln -v -s shell-ai ~/.cargo/bin/shai
 - **Shell integration:** Tab completions, aliases, and Ctrl+G keybinding via `shell-ai integration generate`.
 - **Multilingual:** Describe tasks in any language the AI model understands. Responses adapt to your system locale.
 - **Explain from `man`:** `shell-ai explain` includes grounding from man pages, not just AI knowledge.
-- **Multiple providers:** OpenAI (including: Groq, Ollama, Mistral), Azure OpenAI, Anthropic (including: Claude API, Ollama v0.14.0+), and Claude Code CLI.
+- **Multiple providers:** OpenAI, Azure OpenAI, Anthropic, Claude Code CLI – plus OpenAI-compatible services (Groq, Ollama, Mistral) and Anthropic-compatible services (Ollama v0.14.0+).
 - **Interactive workflow:** Select a suggestion, then explain it, execute it, copy it, or revise it.
+- **Live streaming previews:** Watch suggestions and explanations generate token-by-token instead of waiting for the full response.
 - **Vim-style navigation:** j/k keys, number shortcuts (1-9), arrow keys.
 - **Scriptable:** `--frontend=noninteractive` and `--output-format=json` for automation. Pipe commands to `shell-ai explain` via stdin.
 - **Configuration introspection:** `shell-ai config` shows current settings and their sources.
