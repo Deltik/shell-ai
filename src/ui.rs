@@ -13,6 +13,23 @@ use crossterm::{
 use std::io::{self, Write};
 use unicode_width::UnicodeWidthStr;
 
+/// RAII guard that enables terminal raw mode on creation and disables it on drop.
+/// Ensures raw mode is always restored, even on panic or early return.
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn new() -> io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
 /// An option in an interactive select menu.
 #[derive(Clone)]
 pub struct SelectOption {
@@ -94,9 +111,10 @@ impl InteractiveSelect {
     ///
     /// Returns `None` if the user cancelled (Escape/Ctrl+C/q).
     pub fn run(&mut self) -> io::Result<Option<usize>> {
-        terminal::enable_raw_mode()?;
-        let result = self.run_inner();
-        terminal::disable_raw_mode()?;
+        let result = {
+            let _guard = RawModeGuard::new()?;
+            self.run_inner()
+        };
 
         // Clear the menu after selection
         execute!(io::stderr(), cursor::MoveToColumn(0))?;
@@ -347,10 +365,8 @@ impl TextInput {
     ///
     /// Returns `None` if the user cancelled (Escape/Ctrl+C).
     pub fn run(&self) -> io::Result<Option<String>> {
-        terminal::enable_raw_mode()?;
-        let result = self.run_inner();
-        terminal::disable_raw_mode()?;
-        result
+        let _guard = RawModeGuard::new()?;
+        self.run_inner()
     }
 
     fn run_inner(&self) -> io::Result<Option<String>> {
