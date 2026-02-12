@@ -178,8 +178,12 @@ fn truncate_to_limit(text: &str, max_chars: usize) -> String {
         return text.to_string();
     }
 
-    // Find the last newline before the limit
-    let truncated = &text[..max_chars];
+    // Find the nearest char boundary at or before max_chars
+    let boundary = (0..=max_chars)
+        .rev()
+        .find(|&i| text.is_char_boundary(i))
+        .unwrap_or(0);
+    let truncated = &text[..boundary];
     if let Some(last_newline) = truncated.rfind('\n') {
         format!("{}...\n[truncated]", &text[..last_newline])
     } else {
