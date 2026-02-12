@@ -66,6 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   When `suggestion_count` exceeds 9, suggestions beyond the 9th are displayed with `?` as their shortcut key. Navigate to them with arrow keys and press Enter to select.
 
+- **Anthropic provider now uses native structured outputs** instead of tool use for JSON schema enforcement. The previous approach did not guarantee the model would use the tool, potentially returning unstructured responses. The `output_config.format` API guarantees schema-compliant output.
+
 - `Error: API error: Claude CLI failed with exit code 1` when using `provider = "claudecode"` and Claude Code is not configured in verbose mode. The `claude` command at the time of writing requires the `--verbose` option to be set when using the streaming output mode.
 
 ## v0.5.3 (2026-01-29)

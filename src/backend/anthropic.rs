@@ -1,7 +1,7 @@
 //! Native Anthropic Messages API backend.
 //!
-//! This backend uses the Anthropic Messages API directly, with tool use
-//! for structured output enforcement.
+//! This backend uses the Anthropic Messages API directly, with native
+//! structured outputs (`output_config.format`) for JSON schema enforcement.
 
 use super::{Backend, BackendError, CompletionRequest, CompletionResponse, StreamCallback, StreamEvent};
 use crate::http;
@@ -59,16 +59,13 @@ impl AnthropicBackend {
             "stream": stream,
         });
 
-        // Use tool use for structured output if schema provided
+        // Use native structured outputs if schema provided
         if let Some(ref schema) = request.json_schema {
-            payload["tools"] = json!([{
-                "name": &request.schema_name,
-                "description": "Output structured JSON response matching the schema",
-                "input_schema": schema
-            }]);
-            payload["tool_choice"] = json!({
-                "type": "tool",
-                "name": &request.schema_name
+            payload["output_config"] = json!({
+                "format": {
+                    "type": "json_schema",
+                    "schema": schema
+                }
             });
         }
 
@@ -159,13 +156,9 @@ impl Backend for AnthropicBackend {
             }
 
             // Process SSE stream
-            // Anthropic streaming format differs from OpenAI:
-            // - event: content_block_delta with delta.type="text_delta" for text
-            // - event: content_block_delta with delta.type="input_json_delta" for tool input
+            // With structured outputs, JSON responses arrive as text_delta events
             let mut full_content = String::new();
-            let mut tool_input = String::new();
             let mut is_truncated = false;
-            let expect_tool_use = request.json_schema.is_some();
 
             while let Some(data) = stream.next_data().map_err(|e| BackendError::NetworkError(e.to_string()))? {
                 let event: serde_json::Value = match serde_json::from_str(&data) {
@@ -181,30 +174,17 @@ impl Backend for AnthropicBackend {
                 match event_type {
                     "content_block_delta" => {
                         if let Some(delta) = event.get("delta") {
-                            let delta_type = delta.get("type").and_then(|t| t.as_str()).unwrap_or("");
-
-                            match delta_type {
-                                "text_delta" => {
-                                    if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
-                                        if !text.is_empty() {
-                                            full_content.push_str(text);
-                                            callback(StreamEvent::TextDelta(text.to_string()));
-                                        }
+                            if delta.get("type").and_then(|t| t.as_str()) == Some("text_delta") {
+                                if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
+                                    if !text.is_empty() {
+                                        full_content.push_str(text);
+                                        callback(StreamEvent::TextDelta(text.to_string()));
                                     }
                                 }
-                                "input_json_delta" => {
-                                    // For tool use, accumulate the partial JSON
-                                    if let Some(partial) = delta.get("partial_json").and_then(|p| p.as_str()) {
-                                        tool_input.push_str(partial);
-                                        callback(StreamEvent::TextDelta(partial.to_string()));
-                                    }
-                                }
-                                _ => {}
                             }
                         }
                     }
                     "message_delta" => {
-                        // Check stop reason
                         if let Some(delta) = event.get("delta") {
                             if let Some(stop_reason) = delta.get("stop_reason").and_then(|r| r.as_str()) {
                                 if stop_reason == "max_tokens" {
@@ -224,15 +204,8 @@ impl Backend for AnthropicBackend {
                 }
             }
 
-            // Determine final content based on whether we expected tool use
-            let content = if expect_tool_use && !tool_input.is_empty() {
-                tool_input
-            } else {
-                full_content
-            };
-
             return Ok(CompletionResponse {
-                content,
+                content: full_content,
                 is_truncated,
             });
         }
