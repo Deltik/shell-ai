@@ -235,8 +235,8 @@ struct ExplanationNode {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ExplainResult {
-    synopsis: String,
     explanations: Vec<ExplanationNode>,
+    synopsis: String,
 }
 
 /// Build the JSON schema for explain output.
@@ -284,16 +284,16 @@ fn build_explain_schema(with_citations: bool) -> serde_json::Value {
     json!({
         "type": "object",
         "properties": {
-            "synopsis": {
-                "type": "string",
-                "description": "A one-line description of what the overall command does"
-            },
             "explanations": {
                 "type": "array",
                 "items": { "$ref": "#/$defs/explanation" }
+            },
+            "synopsis": {
+                "type": "string",
+                "description": "A one-line description of what the overall command does"
             }
         },
-        "required": ["synopsis", "explanations"],
+        "required": ["explanations", "synopsis"],
         "additionalProperties": false,
         "$defs": {
             "explanation": {
@@ -332,7 +332,7 @@ fn build_system_prompt(with_citations: bool, locale: Option<&str>) -> String {
         );
     }
 
-    prompt.push_str("Output format: JSON with \"synopsis\" and \"explanations\" array.\n\n");
+    prompt.push_str("Output format: JSON with \"explanations\" array, then \"synopsis\" string.\n\n");
     prompt.push_str("Each explanation node has these fields:\n");
     prompt.push_str("- \"segment\": The exact token from the command (will be highlighted)\n");
 
