@@ -2017,8 +2017,9 @@ fn mask_value(value: &str) -> String {
     if value.is_empty() || value == "(not set)" {
         return value.to_string();
     }
-    if value.len() > 6 {
-        format!("****{}", &value[value.len() - 6..])
+    if value.chars().count() > 6 {
+        let start = value.char_indices().rev().nth(5).map(|(i, _)| i).unwrap_or(0);
+        format!("****{}", &value[start..])
     } else {
         "****".to_string()
     }
