@@ -776,7 +776,11 @@ fn handle_command_with_ctx(
     // Update context buffer with last 1500 characters.
     let max_len = 1500usize;
     let trimmed = if stdout.len() > max_len {
-        stdout[stdout.len() - max_len..].to_string()
+        let start = stdout.len() - max_len;
+        let start = (start..stdout.len())
+            .find(|&i| stdout.is_char_boundary(i))
+            .unwrap_or(stdout.len());
+        stdout[start..].to_string()
     } else {
         stdout
     };
