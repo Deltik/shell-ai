@@ -3,6 +3,7 @@
 //! Provides interactive prompts with both arrow key navigation and
 //! number/letter shortcuts (similar to Claude Code's interface).
 
+use crate::render::{Color, Region, Style, TerminalRenderer, VirtualBuffer};
 use colored::Colorize;
 use crossterm::{
     cursor,
@@ -379,24 +380,38 @@ impl TextInput {
 
     fn run_inner(&self) -> io::Result<Option<String>> {
         let mut stderr = io::stderr();
+        let mut renderer = TerminalRenderer::new();
         let mut input = self.initial_value.clone();
         let mut cursor_pos = input.chars().count(); // char index, not byte offset
 
         loop {
-            // Render prompt and current input
-            execute!(
-                stderr,
-                cursor::MoveToColumn(0),
-                terminal::Clear(ClearType::CurrentLine)
-            )?;
-            write!(stderr, "{} {}", self.prompt.cyan(), input)?;
+            let (width, height) = TerminalRenderer::term_size();
+            let drawable_height = height.saturating_sub(1); // Reserve 1 for parking line
+            if width == 0 || drawable_height == 0 {
+                if let Event::Key(_) = event::read()? {}
+                continue;
+            }
 
-            // Position cursor using display widths
-            let prompt_width = UnicodeWidthStr::width(self.prompt.as_str()) + 1; // +1 for space
-            let byte_offset = Self::char_to_byte(&input, cursor_pos);
-            let input_width = UnicodeWidthStr::width(&input[..byte_offset]);
-            execute!(stderr, cursor::MoveToColumn((prompt_width + input_width) as u16))?;
-            stderr.flush()?;
+            // Try multi-line render — use one extra row so overflow is detectable
+            // (VirtualBuffer clips at its height, so without the extra row
+            // content_rows would always equal drawable_height and scroll mode
+            // could never trigger)
+            let buf_height = drawable_height.saturating_add(1);
+            let (buffer, content_rows, cursor_row, cursor_col) =
+                self.build_multiline_buffer(&input, cursor_pos, width, buf_height);
+
+            let cursor_visual_row = if content_rows <= drawable_height as usize {
+                // Multi-line mode: content fits
+                let regions = vec![Region::new(0, content_rows)];
+                renderer.render_with_cursor(&buffer, &regions, (cursor_row, cursor_col))?;
+                cursor_row
+            } else {
+                // Horizontal scroll fallback
+                let (buffer, regions, col) =
+                    self.build_scroll_buffer(&input, cursor_pos, width);
+                renderer.render_with_cursor(&buffer, &regions, (0, col))?;
+                0
+            };
 
             // Wait for key event
             if let Event::Key(key_event) = event::read()? {
@@ -406,11 +421,20 @@ impl TextInput {
                 match (key_event.code, ctrl, alt) {
                     // Cancel
                     (KeyCode::Char('c'), true, _) | (KeyCode::Esc, _, _) => {
-                        execute!(stderr, cursor::MoveToColumn(0), terminal::Clear(ClearType::CurrentLine))?;
+                        renderer.clear()?;
                         return Ok(None);
                     }
                     // Confirm
                     (KeyCode::Enter, _, _) => {
+                        // Move cursor from edit position to below content
+                        let parking_row = renderer.painted_rows();
+                        let down = parking_row.saturating_sub(cursor_visual_row);
+                        if down > 0 {
+                            write!(stderr, "\r")?;
+                            for _ in 0..down {
+                                writeln!(stderr)?;
+                            }
+                        }
                         write!(stderr, "\r\n")?;
                         stderr.flush()?;
                         return Ok(Some(input));
@@ -492,6 +516,160 @@ impl TextInput {
                 }
             }
         }
+    }
+
+    /// Build a VirtualBuffer with the prompt and input wrapping across multiple
+    /// lines, and capture the visual cursor position within the buffer.
+    fn build_multiline_buffer(
+        &self,
+        input: &str,
+        cursor_pos: usize,
+        width: u16,
+        height: u16,
+    ) -> (VirtualBuffer, usize, usize, usize) {
+        // Returns (buffer, content_rows, cursor_row, cursor_col)
+
+        let mut buf = VirtualBuffer::new(width, height);
+
+        // Write prompt in cyan bold
+        buf.set_style(Style {
+            fg: Some(Color::Cyan),
+            bold: true,
+            ..Default::default()
+        });
+        buf.write_str(&self.prompt);
+        buf.reset_style();
+        buf.write_char(' ');
+
+        // Write input up to cursor, capture visual position
+        let byte_offset = Self::char_to_byte(input, cursor_pos);
+        buf.write_str(&input[..byte_offset]);
+
+        // Capture cursor visual position
+        // Edge case: cursor at exact end of a full row should be on the next line
+        let (cursor_row, cursor_col) = if cursor_pos > 0
+            && buf.cursor_col() >= width as usize
+        {
+            (buf.cursor_row() + 1, 0)
+        } else {
+            (buf.cursor_row(), buf.cursor_col())
+        };
+
+        // Write rest of input
+        buf.write_str(&input[byte_offset..]);
+
+        // Content rows = last row with content + 1
+        // Also include cursor_row in case cursor is on an empty line below content
+        let last_content_row = if buf.cursor_col() > 0 || buf.cursor_row() > 0 {
+            buf.cursor_row() + 1
+        } else {
+            1
+        };
+        let content_rows = last_content_row.max(cursor_row + 1);
+
+        (buf, content_rows, cursor_row, cursor_col)
+    }
+
+    /// Build a single-row VirtualBuffer with horizontal scrolling when
+    /// multi-line content would exceed the terminal height.
+    fn build_scroll_buffer(
+        &self,
+        input: &str,
+        cursor_pos: usize,
+        width: u16,
+    ) -> (VirtualBuffer, Vec<Region>, usize) {
+        // Returns (buffer, regions, cursor_col)
+
+        let mut buf = VirtualBuffer::new(width, 1);
+        let width = width as usize;
+
+        // Write prompt
+        buf.set_style(Style {
+            fg: Some(Color::Cyan),
+            bold: true,
+            ..Default::default()
+        });
+        buf.write_str(&self.prompt);
+        buf.reset_style();
+        buf.write_char(' ');
+        let prompt_cols = buf.cursor_col();
+
+        // Calculate input display widths
+        let input_chars: Vec<char> = input.chars().collect();
+        let char_widths: Vec<usize> = input_chars
+            .iter()
+            .map(|c| unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0))
+            .collect();
+        let cumulative: Vec<usize> = std::iter::once(0)
+            .chain(char_widths.iter().scan(0, |acc, &w| {
+                *acc += w;
+                Some(*acc)
+            }))
+            .collect();
+        let total_input_width = *cumulative.last().unwrap_or(&0);
+        let cursor_x = cumulative[cursor_pos]; // display column of cursor in input
+
+        let available = width.saturating_sub(prompt_cols);
+        if total_input_width <= available {
+            // Fits without scrolling
+            buf.write_str(input);
+            let cursor_col = prompt_cols + cursor_x;
+            return (buf, vec![Region::new(0, 1)], cursor_col);
+        }
+
+        // Reserve last column for the cursor so typed characters don't
+        // visually overlap it (the terminal cursor sits on a cell, not between cells)
+        let available = available.saturating_sub(1);
+
+        // Need scrolling — reserve 1 col for each overflow indicator
+        let has_left = cursor_x > available.saturating_sub(2);
+        let has_right = cursor_x < total_input_width.saturating_sub(1);
+
+        let left_indicator: usize = if has_left { 1 } else { 0 };
+        let right_indicator: usize = if has_right { 1 } else { 0 };
+        let viewport_width = available.saturating_sub(left_indicator + right_indicator);
+
+        if viewport_width == 0 {
+            return (buf, vec![Region::new(0, 1)], prompt_cols);
+        }
+
+        // Calculate viewport start (in display columns) to keep cursor visible
+        // Center cursor in viewport, clamped to valid range
+        let viewport_start = cursor_x
+            .saturating_sub(viewport_width / 2)
+            .min(total_input_width.saturating_sub(viewport_width));
+
+        // Write left indicator
+        if has_left {
+            buf.set_style(Style::dim());
+            buf.write_char('\u{2026}'); // …
+            buf.reset_style();
+        }
+
+        // Write visible characters
+        for (i, &ch) in input_chars.iter().enumerate() {
+            let char_end = cumulative[i + 1];
+            let char_start = cumulative[i];
+            if char_end <= viewport_start {
+                continue;
+            }
+            if char_start >= viewport_start + viewport_width {
+                break;
+            }
+            buf.write_char(ch);
+        }
+
+        // Write right indicator
+        if has_right {
+            buf.set_style(Style::dim());
+            buf.write_char('\u{2026}'); // …
+            buf.reset_style();
+        }
+
+        // Cursor column in terminal
+        let cursor_col = prompt_cols + left_indicator + cursor_x.saturating_sub(viewport_start);
+
+        (buf, vec![Region::new(0, 1)], cursor_col)
     }
 }
 
@@ -604,5 +782,303 @@ mod tests {
         // 40 emoji = 80 display columns = 1 line
         let line = "🎉".repeat(40);
         assert_eq!(InteractiveSelect::lines_needed(&line, 80), 1);
+    }
+
+    // ========================================================================
+    // Helper for TextInput rendering tests
+    // ========================================================================
+
+    /// Extract visible characters from a buffer row as a String.
+    fn row_text(buf: &VirtualBuffer, row: usize) -> String {
+        let r = buf.row(row).unwrap();
+        r.cells
+            .iter()
+            .filter_map(|c| if c.is_continuation { None } else { c.ch })
+            .collect()
+    }
+
+    /// Create a TextInput with a short prompt for testing.
+    fn test_input(prompt: &str) -> TextInput {
+        TextInput::new(prompt)
+    }
+
+    // ========================================================================
+    // build_multiline_buffer tests
+    // ========================================================================
+
+    #[test]
+    fn test_multiline_empty_input() {
+        let ti = test_input(">");
+        // prompt ">" + space = 2 cols; empty input
+        let (_buf, content_rows, cursor_row, cursor_col) =
+            ti.build_multiline_buffer("", 0, 80, 24);
+        assert_eq!(content_rows, 1);
+        assert_eq!(cursor_row, 0);
+        assert_eq!(cursor_col, 2); // after "> "
+    }
+
+    #[test]
+    fn test_multiline_short_input_cursor_at_end() {
+        let ti = test_input(">");
+        // prompt ">" + space = 2 cols; "hello" = 5 cols; total = 7
+        let (_buf, content_rows, cursor_row, cursor_col) =
+            ti.build_multiline_buffer("hello", 5, 80, 24);
+        assert_eq!(content_rows, 1);
+        assert_eq!(cursor_row, 0);
+        assert_eq!(cursor_col, 7); // 2 (prompt) + 5 (input)
+    }
+
+    #[test]
+    fn test_multiline_cursor_at_start() {
+        let ti = test_input(">");
+        let (_buf, _content_rows, cursor_row, cursor_col) =
+            ti.build_multiline_buffer("hello", 0, 80, 24);
+        assert_eq!(cursor_row, 0);
+        assert_eq!(cursor_col, 2); // right after "> "
+    }
+
+    #[test]
+    fn test_multiline_cursor_in_middle() {
+        let ti = test_input(">");
+        let (_buf, _content_rows, cursor_row, cursor_col) =
+            ti.build_multiline_buffer("hello", 3, 80, 24);
+        assert_eq!(cursor_row, 0);
+        assert_eq!(cursor_col, 5); // 2 + 3
+    }
+
+    #[test]
+    fn test_multiline_wraps_to_second_line() {
+        let ti = test_input(">");
+        // width=10, prompt "> " = 2 cols, leaves 8 cols on first line
+        // "abcdefghij" = 10 chars; first 8 on row 0, "ij" on row 1
+        let (buf, content_rows, cursor_row, cursor_col) =
+            ti.build_multiline_buffer("abcdefghij", 10, 10, 24);
+        assert_eq!(content_rows, 2);
+        assert_eq!(cursor_row, 1);
+        assert_eq!(cursor_col, 2); // "ij" takes 2 cols on row 1
+        assert_eq!(row_text(&buf, 0), "> abcdefgh");
+        assert_eq!(row_text(&buf, 1), "ij");
+    }
+
+    #[test]
+    fn test_multiline_cursor_on_wrapped_line() {
+        let ti = test_input(">");
+        // width=10, "> " = 2 cols, "abcdefghij" wraps; cursor at pos 9 = 'j' on row 1
+        let (_buf, _content_rows, cursor_row, cursor_col) =
+            ti.build_multiline_buffer("abcdefghij", 9, 10, 24);
+        assert_eq!(cursor_row, 1);
+        assert_eq!(cursor_col, 1); // 'j' is at col 1 on row 1
+    }
+
+    #[test]
+    fn test_multiline_cursor_at_exact_row_boundary() {
+        let ti = test_input(">");
+        // width=10, "> " = 2 cols, 8 chars fills row 0 exactly
+        // cursor at pos 8 should land on row 1, col 0
+        let (_buf, content_rows, cursor_row, cursor_col) =
+            ti.build_multiline_buffer("abcdefgh", 8, 10, 24);
+        assert_eq!(cursor_row, 1);
+        assert_eq!(cursor_col, 0);
+        assert_eq!(content_rows, 2); // row 1 needed for cursor
+    }
+
+    #[test]
+    fn test_multiline_wide_chars() {
+        let ti = test_input(">");
+        // width=10, "> " = 2 cols, "日本語" = 6 cols (3 chars × 2)
+        let (buf, content_rows, cursor_row, cursor_col) =
+            ti.build_multiline_buffer("日本語", 3, 10, 24);
+        assert_eq!(content_rows, 1);
+        assert_eq!(cursor_row, 0);
+        assert_eq!(cursor_col, 8); // 2 + 6
+        assert_eq!(row_text(&buf, 0), "> 日本語");
+    }
+
+    #[test]
+    fn test_multiline_wide_char_wraps_at_edge() {
+        let ti = test_input(">");
+        // width=5, "> " = 2 cols, 3 cols remain; "日" needs 2 cols
+        // First "日" at cols 2-3, second "日" doesn't fit (needs col 4-5 but col 4
+        // is the last), so it wraps to row 1
+        let (buf, content_rows, _cursor_row, _cursor_col) =
+            ti.build_multiline_buffer("日日", 2, 5, 24);
+        assert_eq!(content_rows, 2);
+        assert_eq!(row_text(&buf, 0), "> 日");
+        assert_eq!(row_text(&buf, 1), "日");
+    }
+
+    #[test]
+    fn test_multiline_overflow_detected() {
+        let ti = test_input(">");
+        // width=5, height=2 (drawable_height+1 = 3 in practice, but test directly)
+        // "> " = 2 cols, "abcdefghijklmno" = 15 chars
+        // Row 0: "> abc" (5 cols), Row 1: "defgh" (5 cols), Row 2: "ijklm" ...
+        // With height=2, buffer clips at row 1, but content needs 4+ rows
+        // content_rows should exceed height=2 to trigger scroll fallback
+        let (_buf, content_rows, _cursor_row, _cursor_col) =
+            ti.build_multiline_buffer("abcdefghijklmno", 15, 5, 3);
+        assert!(
+            content_rows > 2,
+            "content_rows ({content_rows}) should exceed drawable height (2) to trigger scroll mode"
+        );
+    }
+
+    #[test]
+    fn test_multiline_exact_fit_no_overflow() {
+        let ti = test_input(">");
+        // width=10, height=2, "> " = 2 cols
+        // "abcdefgh" = 8 chars fits exactly on row 0 (2 + 8 = 10)
+        // Cursor at end goes to row 1 col 0, content_rows = 2
+        // With height=2, this should NOT overflow (content_rows <= 2)
+        let (_buf, content_rows, cursor_row, _cursor_col) =
+            ti.build_multiline_buffer("abcdefgh", 8, 10, 2);
+        assert_eq!(content_rows, 2); // cursor on row 1
+        assert_eq!(cursor_row, 1);
+    }
+
+    #[test]
+    fn test_multiline_content_rows_includes_cursor_line() {
+        let ti = test_input(">");
+        // Cursor at end of a full row should produce an extra content row
+        // even though no input characters are on that row
+        let (_buf, content_rows, cursor_row, cursor_col) =
+            ti.build_multiline_buffer("abcdefgh", 8, 10, 24);
+        assert_eq!(cursor_row, 1);
+        assert_eq!(cursor_col, 0);
+        assert!(content_rows >= 2, "must include the row where the cursor sits");
+    }
+
+    // ========================================================================
+    // build_scroll_buffer tests
+    // ========================================================================
+
+    #[test]
+    fn test_scroll_short_input_no_scrolling() {
+        let ti = test_input(">");
+        // width=80, "> " = 2 cols, "hi" = 2 cols; fits easily
+        let (buf, regions, cursor_col) = ti.build_scroll_buffer("hi", 2, 80);
+        assert_eq!(regions, vec![Region::new(0, 1)]);
+        assert_eq!(cursor_col, 4); // 2 + 2
+        assert_eq!(row_text(&buf, 0), "> hi");
+    }
+
+    #[test]
+    fn test_scroll_cursor_at_start() {
+        let ti = test_input(">");
+        let (_buf, _regions, cursor_col) = ti.build_scroll_buffer("hi", 0, 80);
+        assert_eq!(cursor_col, 2); // right after "> "
+    }
+
+    #[test]
+    fn test_scroll_long_input_has_indicators() {
+        let ti = test_input(">");
+        // width=20, "> " = 2 cols, available = 18, cursor reserved = 17
+        // 30 chars of input; cursor in middle
+        let input = "a".repeat(30);
+        let (buf, _regions, _cursor_col) = ti.build_scroll_buffer(&input, 15, 20);
+        let text = row_text(&buf, 0);
+        // Should have ellipsis indicators when content overflows
+        assert!(
+            text.contains('\u{2026}'),
+            "scrolling buffer should contain ellipsis indicator"
+        );
+    }
+
+    #[test]
+    fn test_scroll_cursor_within_terminal_width() {
+        let ti = test_input(">");
+        // Regression: cursor_col must never exceed width-1
+        let input = "x".repeat(200);
+        let width: u16 = 40;
+        for cursor_pos in [0, 50, 100, 199, 200] {
+            let (_buf, _regions, cursor_col) =
+                ti.build_scroll_buffer(&input, cursor_pos, width);
+            assert!(
+                cursor_col < width as usize,
+                "cursor_col ({cursor_col}) must be < width ({width}) at cursor_pos={cursor_pos}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_scroll_cursor_at_end_no_right_indicator() {
+        let ti = test_input(">");
+        // Cursor at end of input — no content to the right, so no right "…"
+        let input = "a".repeat(50);
+        let len = input.chars().count();
+        let (buf, _regions, _cursor_col) = ti.build_scroll_buffer(&input, len, 30);
+        let text = row_text(&buf, 0);
+        // The last visible non-space char should NOT be "…"
+        let chars: Vec<char> = text.chars().collect();
+        let last = chars.last().unwrap();
+        assert_ne!(*last, '\u{2026}', "no right indicator when cursor is at end");
+    }
+
+    #[test]
+    fn test_scroll_cursor_at_start_no_left_indicator() {
+        let ti = test_input(">");
+        // Cursor at start of input — no content to the left, so no left "…"
+        let input = "a".repeat(50);
+        let (buf, _regions, _cursor_col) = ti.build_scroll_buffer(&input, 0, 30);
+        let text = row_text(&buf, 0);
+        assert!(
+            !text.starts_with("> \u{2026}"),
+            "no left indicator when cursor is at start"
+        );
+    }
+
+    #[test]
+    fn test_scroll_wide_chars() {
+        let ti = test_input(">");
+        // width=10, "> " = 2 cols, "日本語日本語" = 12 cols; overflows
+        let input = "日本語日本語";
+        let len = input.chars().count();
+        let (_buf, _regions, cursor_col) = ti.build_scroll_buffer(input, len, 10);
+        assert!(
+            cursor_col < 10,
+            "cursor_col ({cursor_col}) must be < width (10) with wide chars"
+        );
+    }
+
+    #[test]
+    fn test_scroll_cursor_reserved_cell() {
+        let ti = test_input(">");
+        // Regression: the last cell of the line is reserved for the cursor.
+        // With cursor at end of a long input, cursor_col should be at most
+        // width - 1, leaving the cursor on an empty cell rather than on
+        // content.
+        let input = "b".repeat(100);
+        let len = input.chars().count();
+        let width: u16 = 20;
+        let (_buf, _regions, cursor_col) = ti.build_scroll_buffer(&input, len, width);
+        assert!(
+            cursor_col < width as usize,
+            "cursor must fit within terminal width"
+        );
+    }
+
+    // ========================================================================
+    // char_to_byte tests
+    // ========================================================================
+
+    #[test]
+    fn test_char_to_byte_ascii() {
+        assert_eq!(TextInput::char_to_byte("hello", 0), 0);
+        assert_eq!(TextInput::char_to_byte("hello", 3), 3);
+        assert_eq!(TextInput::char_to_byte("hello", 5), 5);
+    }
+
+    #[test]
+    fn test_char_to_byte_multibyte() {
+        // "日本語" — each char is 3 bytes
+        assert_eq!(TextInput::char_to_byte("日本語", 0), 0);
+        assert_eq!(TextInput::char_to_byte("日本語", 1), 3);
+        assert_eq!(TextInput::char_to_byte("日本語", 2), 6);
+        assert_eq!(TextInput::char_to_byte("日本語", 3), 9);
+    }
+
+    #[test]
+    fn test_char_to_byte_past_end() {
+        assert_eq!(TextInput::char_to_byte("hi", 10), 2);
     }
 }

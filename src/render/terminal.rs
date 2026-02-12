@@ -62,8 +62,37 @@ impl TerminalRenderer {
         terminal::size().unwrap_or((80, 24))
     }
 
+    /// Get the number of painted rows from the last render.
+    pub fn painted_rows(&self) -> usize {
+        self.painted_rows
+    }
+
     /// Render a buffer with regions to stderr.
     pub fn render(&mut self, buffer: &VirtualBuffer, regions: &[Region]) -> io::Result<()> {
+        self.render_impl(buffer, regions, None)
+    }
+
+    /// Render a buffer and position the terminal cursor at a specific cell
+    /// instead of parking it below content. The cursor positioning happens
+    /// within the BSU/ESU synchronized update to prevent flicker.
+    pub fn render_with_cursor(
+        &mut self,
+        buffer: &VirtualBuffer,
+        regions: &[Region],
+        cursor: (usize, usize),
+    ) -> io::Result<()> {
+        self.render_impl(buffer, regions, Some(cursor))
+    }
+
+    /// Shared render implementation. When `cursor` is `None`, parks the cursor
+    /// below content (streaming mode). When `Some((row, col))`, positions the
+    /// terminal cursor at that cell (interactive editing mode).
+    fn render_impl(
+        &mut self,
+        buffer: &VirtualBuffer,
+        regions: &[Region],
+        cursor: Option<(usize, usize)>,
+    ) -> io::Result<()> {
         let (width, height) = Self::term_size();
         let drawable_height = height.saturating_sub(RESERVED_ROWS);
         if drawable_height == 0 {
@@ -85,6 +114,10 @@ impl TerminalRenderer {
         // Move cursor back to start of our render area
         if self.cursor_row > 0 {
             self.output.push_str(&format!("\x1b[{}A\r", self.cursor_row));
+        } else if self.cursor_col > 0 {
+            // render_with_cursor() may leave the cursor mid-row on row 0;
+            // emit \r so the actual terminal column matches the reset tracking.
+            self.output.push('\r');
         }
 
         // Reset cursor tracking for this render pass
@@ -140,6 +173,12 @@ impl TerminalRenderer {
 
         // Reset style at end
         self.emit_reset();
+
+        // Position terminal cursor: either at the edit point or parked below
+        if let Some((target_row, target_col)) = cursor {
+            self.emit_move_to(target_row, target_col);
+        }
+
         self.output.push_str(ESU);
 
         // Write to stderr
@@ -340,16 +379,34 @@ impl TerminalRenderer {
     }
 
     /// Clear all painted rows and reset state.
+    ///
+    /// Handles the cursor being at any position (not just the parking line).
+    /// After `render_with_cursor()`, the cursor is at the edit position, so
+    /// we first move to the parking line before clearing upward.
     pub fn clear(&mut self) -> io::Result<()> {
         if self.painted_rows > 0 {
             let mut stderr = io::stderr().lock();
 
             write!(stderr, "{}", BSU)?;
-            // Move up and clear each line we painted
-            for _ in 0..self.painted_rows {
-                write!(stderr, "\x1b[A\x1b[2K")?; // Move up, clear line
+
+            // Move from current position to parking line (below last painted row)
+            let parking_row = self.painted_rows;
+            if self.cursor_row < parking_row {
+                let down = parking_row - self.cursor_row;
+                write!(stderr, "\r")?;
+                for _ in 0..down {
+                    writeln!(stderr)?;
+                }
+            } else if self.cursor_row > parking_row {
+                let up = self.cursor_row - parking_row;
+                write!(stderr, "\r\x1b[{}A", up)?;
             }
-            write!(stderr, "\x1b[2K")?; // Clear the cursor parking line
+
+            // Now at parking line — move up and clear each painted row
+            for _ in 0..self.painted_rows {
+                write!(stderr, "\x1b[A\x1b[2K")?;
+            }
+            write!(stderr, "\x1b[2K")?; // Clear parking line
             write!(stderr, "{}", ESU)?;
             stderr.flush()?;
 

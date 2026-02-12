@@ -71,6 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   When `suggestion_count` exceeds 9, suggestions beyond the 9th are displayed with `?` as their shortcut key. Navigate to them with arrow keys and press Enter to select.
 
+- **"Revise command:" text input no longer breaks when input exceeds terminal width**
+
+  The previous implementation rendered on a single terminal line using `MoveToColumn`. When the prompt and input together exceeded the terminal width, cursor positioning and line clearing broke — `MoveToColumn` past the width pushed the cursor off-screen, and `Clear(CurrentLine)` only cleared one physical line, leaving ghost text from wrapped content on every keystroke.
+
+  Text input now renders through the same virtual buffer and diff-based rendering engine used for streaming previews. Content wraps naturally across multiple terminal rows with the cursor correctly tracked at the edit point within the wrapped area. When wrapped content would exceed the terminal height, the editor falls back to a horizontal scroll mode with `…` overflow indicators. The terminal understands the wrapped lines as a single logical line, so text selection and reflow work correctly.
+
 - **Anthropic provider now uses native structured outputs** instead of tool use for JSON schema enforcement. The previous approach did not guarantee the model would use the tool, potentially returning unstructured responses. The `output_config.format` API guarantees schema-compliant output.
 
 - `Error: API error: Claude CLI failed with exit code 1` when using `provider = "claudecode"` and Claude Code is not configured in verbose mode. The `claude` command at the time of writing requires the `--verbose` option to be set when using the streaming output mode.
