@@ -16,7 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Watch AI responses materialize in real-time. As suggestions generate, they appear token-by-token in a dedicated preview pane. This tighter feedback loop lets you see results faster before they're all ready.
 
   - `shell-ai suggest`: See all your suggestions stream in simultaneously, each in its own slot. Pick the one you want the moment it looks right.
+
+    [![shell-ai suggest -- 'perl: Animate 5 seconds of an indeterminate progress bar in the style of a six-color ANSI rainbow wave at 24 frames per second'](docs/images/suggest-danish.gif)](docs/images/suggest-danish.gif)
+
   - `shell-ai explain`: See the breakdown stream directly into your terminal as the AI reasons through the command.
+
+    [![shell-ai explain -- 'git rebase -i --autosquash --autostash origin/main && git rebase --autostash --committer-date-is-author-date origin/main'](docs/images/explain-git-rebase.gif)](docs/images/explain-git-rebase.gif)
 
   The preview adapts to your terminal: If there's not enough room for all the content, it gracefully truncates while preserving structure.
 
