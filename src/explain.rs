@@ -234,7 +234,8 @@ struct ExplanationNode {
     prefix: Option<String>,
     #[serde(default)]
     suffix: Option<String>,
-    children: Vec<ExplanationNode>,
+    #[serde(default)]
+    children: Option<Vec<ExplanationNode>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -249,7 +250,7 @@ fn build_explain_schema(with_citations: bool) -> serde_json::Value {
     use serde_json::json;
 
     let mut properties = serde_json::Map::new();
-    let mut required = vec!["segment", "prefix", "suffix", "children"];
+    let mut required = vec!["segment", "prefix", "suffix"];
 
     properties.insert("segment".to_string(), json!({
         "type": "string",
@@ -693,7 +694,9 @@ fn render_node(original_command: &str, node: &ExplanationNode, indent: usize) {
 
     println!("{}", line);
 
-    for child in &node.children {
-        render_node(original_command, child, indent + 1);
+    if let Some(children) = &node.children {
+        for child in children {
+            render_node(original_command, child, indent + 1);
+        }
     }
 }
