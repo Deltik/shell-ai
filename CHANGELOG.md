@@ -7,6 +7,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.1 (UNRELEASED)
+
+### Fixed
+
+- **Arrow keys moved two options at a time on Windows** ([#2](https://github.com/Deltik/shell-ai/issues/2))
+
+  On Windows, crossterm reports both key press and key release events. The UI event loops now filter for press and repeat events only, fixing double-input on Windows while preserving key-repeat behavior.
+
 ## v0.6.0 (2026-02-12)
 
 ### Added

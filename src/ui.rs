@@ -7,12 +7,23 @@ use crate::render::{Color, Region, Style, TerminalRenderer, VirtualBuffer};
 use colored::Colorize;
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{self, ClearType},
 };
 use std::io::{self, Write};
 use unicode_width::UnicodeWidthStr;
+
+/// Read the next key-press or key-repeat event, skipping releases and non-key events.
+fn read_key_press() -> io::Result<KeyEvent> {
+    loop {
+        if let Event::Key(ke) = event::read()? {
+            if matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                return Ok(ke);
+            }
+        }
+    }
+}
 
 /// RAII guard that enables terminal raw mode on creation and disables it on drop.
 /// Ensures raw mode is always restored, even on panic or early return.
@@ -133,40 +144,39 @@ impl InteractiveSelect {
             first_render = false;
 
             // Wait for key event
-            if let Event::Key(key_event) = event::read()? {
-                match self.handle_key(key_event) {
-                    KeyAction::Select(idx) => {
-                        // Check if the selected option is a quit option (preserves display)
-                        if self.options.get(idx).map(|o| o.key) == Some('q') {
-                            write!(stderr, "\r\n")?;
-                            stderr.flush()?;
-                            return Ok(Some(idx));
-                        }
-                        // Clear the menu before returning
-                        self.clear_menu(&mut stderr)?;
-                        return Ok(Some(idx));
-                    }
-                    KeyAction::Cancel => {
+            let key_event = read_key_press()?;
+            match self.handle_key(key_event) {
+                KeyAction::Select(idx) => {
+                    // Check if the selected option is a quit option (preserves display)
+                    if self.options.get(idx).map(|o| o.key) == Some('q') {
                         write!(stderr, "\r\n")?;
                         stderr.flush()?;
-                        return Ok(None);
+                        return Ok(Some(idx));
                     }
-                    KeyAction::MoveUp => {
-                        if self.selected > 0 {
-                            self.selected -= 1;
-                        } else {
-                            self.selected = self.options.len().saturating_sub(1);
-                        }
-                    }
-                    KeyAction::MoveDown => {
-                        if self.selected < self.options.len().saturating_sub(1) {
-                            self.selected += 1;
-                        } else {
-                            self.selected = 0;
-                        }
-                    }
-                    KeyAction::None => {}
+                    // Clear the menu before returning
+                    self.clear_menu(&mut stderr)?;
+                    return Ok(Some(idx));
                 }
+                KeyAction::Cancel => {
+                    write!(stderr, "\r\n")?;
+                    stderr.flush()?;
+                    return Ok(None);
+                }
+                KeyAction::MoveUp => {
+                    if self.selected > 0 {
+                        self.selected -= 1;
+                    } else {
+                        self.selected = self.options.len().saturating_sub(1);
+                    }
+                }
+                KeyAction::MoveDown => {
+                    if self.selected < self.options.len().saturating_sub(1) {
+                        self.selected += 1;
+                    } else {
+                        self.selected = 0;
+                    }
+                }
+                KeyAction::None => {}
             }
         }
     }
@@ -388,7 +398,7 @@ impl TextInput {
             let (width, height) = TerminalRenderer::term_size();
             let drawable_height = height.saturating_sub(1); // Reserve 1 for parking line
             if width == 0 || drawable_height == 0 {
-                if let Event::Key(_) = event::read()? {}
+                read_key_press()?;
                 continue;
             }
 
@@ -414,106 +424,105 @@ impl TextInput {
             };
 
             // Wait for key event
-            if let Event::Key(key_event) = event::read()? {
-                let ctrl = key_event.modifiers.contains(KeyModifiers::CONTROL);
-                let alt = key_event.modifiers.contains(KeyModifiers::ALT);
+            let key_event = read_key_press()?;
+            let ctrl = key_event.modifiers.contains(KeyModifiers::CONTROL);
+            let alt = key_event.modifiers.contains(KeyModifiers::ALT);
 
-                match (key_event.code, ctrl, alt) {
-                    // Cancel
-                    (KeyCode::Char('c'), true, _) | (KeyCode::Esc, _, _) => {
-                        renderer.clear()?;
-                        return Ok(None);
-                    }
-                    // Confirm
-                    (KeyCode::Enter, _, _) => {
-                        // Move cursor from edit position to below content
-                        let parking_row = renderer.painted_rows();
-                        let down = parking_row.saturating_sub(cursor_visual_row);
-                        if down > 0 {
-                            write!(stderr, "\r")?;
-                            for _ in 0..down {
-                                writeln!(stderr)?;
-                            }
+            match (key_event.code, ctrl, alt) {
+                // Cancel
+                (KeyCode::Char('c'), true, _) | (KeyCode::Esc, _, _) => {
+                    renderer.clear()?;
+                    return Ok(None);
+                }
+                // Confirm
+                (KeyCode::Enter, _, _) => {
+                    // Move cursor from edit position to below content
+                    let parking_row = renderer.painted_rows();
+                    let down = parking_row.saturating_sub(cursor_visual_row);
+                    if down > 0 {
+                        write!(stderr, "\r")?;
+                        for _ in 0..down {
+                            writeln!(stderr)?;
                         }
-                        write!(stderr, "\r\n")?;
-                        stderr.flush()?;
-                        return Ok(Some(input));
                     }
-                    // Beginning of line: Ctrl+A or Home
-                    (KeyCode::Char('a'), true, _) | (KeyCode::Home, _, _) => {
-                        cursor_pos = 0;
+                    write!(stderr, "\r\n")?;
+                    stderr.flush()?;
+                    return Ok(Some(input));
+                }
+                // Beginning of line: Ctrl+A or Home
+                (KeyCode::Char('a'), true, _) | (KeyCode::Home, _, _) => {
+                    cursor_pos = 0;
+                }
+                // End of line: Ctrl+E or End
+                (KeyCode::Char('e'), true, _) | (KeyCode::End, _, _) => {
+                    cursor_pos = input.chars().count();
+                }
+                // Kill to beginning: Ctrl+U
+                (KeyCode::Char('u'), true, _) => {
+                    let byte_off = Self::char_to_byte(&input, cursor_pos);
+                    input.drain(..byte_off);
+                    cursor_pos = 0;
+                }
+                // Kill to end: Ctrl+K
+                (KeyCode::Char('k'), true, _) => {
+                    let byte_off = Self::char_to_byte(&input, cursor_pos);
+                    input.truncate(byte_off);
+                }
+                // Delete word backward: Ctrl+W or Alt+Backspace
+                (KeyCode::Char('w'), true, _) | (KeyCode::Backspace, _, true) => {
+                    let new_pos = find_word_boundary_backward(&input, cursor_pos);
+                    let start = Self::char_to_byte(&input, new_pos);
+                    let end = Self::char_to_byte(&input, cursor_pos);
+                    input.drain(start..end);
+                    cursor_pos = new_pos;
+                }
+                // Delete word forward: Alt+D
+                (KeyCode::Char('d'), _, true) => {
+                    let end_pos = find_word_boundary_forward(&input, cursor_pos);
+                    let start = Self::char_to_byte(&input, cursor_pos);
+                    let end = Self::char_to_byte(&input, end_pos);
+                    input.drain(start..end);
+                }
+                // Move word backward: Ctrl+Left or Alt+B
+                (KeyCode::Left, true, _) | (KeyCode::Char('b'), _, true) => {
+                    cursor_pos = find_word_boundary_backward(&input, cursor_pos);
+                }
+                // Move word forward: Ctrl+Right or Alt+F
+                (KeyCode::Right, true, _) | (KeyCode::Char('f'), _, true) => {
+                    cursor_pos = find_word_boundary_forward(&input, cursor_pos);
+                }
+                // Simple backspace
+                (KeyCode::Backspace, _, _) => {
+                    if cursor_pos > 0 {
+                        let byte_off = Self::char_to_byte(&input, cursor_pos - 1);
+                        input.remove(byte_off);
+                        cursor_pos -= 1;
                     }
-                    // End of line: Ctrl+E or End
-                    (KeyCode::Char('e'), true, _) | (KeyCode::End, _, _) => {
-                        cursor_pos = input.chars().count();
-                    }
-                    // Kill to beginning: Ctrl+U
-                    (KeyCode::Char('u'), true, _) => {
+                }
+                // Delete
+                (KeyCode::Delete, _, _) | (KeyCode::Char('d'), true, _) => {
+                    if cursor_pos < input.chars().count() {
                         let byte_off = Self::char_to_byte(&input, cursor_pos);
-                        input.drain(..byte_off);
-                        cursor_pos = 0;
+                        input.remove(byte_off);
                     }
-                    // Kill to end: Ctrl+K
-                    (KeyCode::Char('k'), true, _) => {
-                        let byte_off = Self::char_to_byte(&input, cursor_pos);
-                        input.truncate(byte_off);
-                    }
-                    // Delete word backward: Ctrl+W or Alt+Backspace
-                    (KeyCode::Char('w'), true, _) | (KeyCode::Backspace, _, true) => {
-                        let new_pos = find_word_boundary_backward(&input, cursor_pos);
-                        let start = Self::char_to_byte(&input, new_pos);
-                        let end = Self::char_to_byte(&input, cursor_pos);
-                        input.drain(start..end);
-                        cursor_pos = new_pos;
-                    }
-                    // Delete word forward: Alt+D
-                    (KeyCode::Char('d'), _, true) => {
-                        let end_pos = find_word_boundary_forward(&input, cursor_pos);
-                        let start = Self::char_to_byte(&input, cursor_pos);
-                        let end = Self::char_to_byte(&input, end_pos);
-                        input.drain(start..end);
-                    }
-                    // Move word backward: Ctrl+Left or Alt+B
-                    (KeyCode::Left, true, _) | (KeyCode::Char('b'), _, true) => {
-                        cursor_pos = find_word_boundary_backward(&input, cursor_pos);
-                    }
-                    // Move word forward: Ctrl+Right or Alt+F
-                    (KeyCode::Right, true, _) | (KeyCode::Char('f'), _, true) => {
-                        cursor_pos = find_word_boundary_forward(&input, cursor_pos);
-                    }
-                    // Simple backspace
-                    (KeyCode::Backspace, _, _) => {
-                        if cursor_pos > 0 {
-                            let byte_off = Self::char_to_byte(&input, cursor_pos - 1);
-                            input.remove(byte_off);
-                            cursor_pos -= 1;
-                        }
-                    }
-                    // Delete
-                    (KeyCode::Delete, _, _) | (KeyCode::Char('d'), true, _) => {
-                        if cursor_pos < input.chars().count() {
-                            let byte_off = Self::char_to_byte(&input, cursor_pos);
-                            input.remove(byte_off);
-                        }
-                    }
-                    // Move left
-                    (KeyCode::Left, _, _) | (KeyCode::Char('b'), true, _) => {
-                        cursor_pos = cursor_pos.saturating_sub(1);
-                    }
-                    // Move right
-                    (KeyCode::Right, _, _) | (KeyCode::Char('f'), true, _) => {
-                        if cursor_pos < input.chars().count() {
-                            cursor_pos += 1;
-                        }
-                    }
-                    // Regular character input
-                    (KeyCode::Char(c), false, false) => {
-                        let byte_off = Self::char_to_byte(&input, cursor_pos);
-                        input.insert(byte_off, c);
+                }
+                // Move left
+                (KeyCode::Left, _, _) | (KeyCode::Char('b'), true, _) => {
+                    cursor_pos = cursor_pos.saturating_sub(1);
+                }
+                // Move right
+                (KeyCode::Right, _, _) | (KeyCode::Char('f'), true, _) => {
+                    if cursor_pos < input.chars().count() {
                         cursor_pos += 1;
                     }
-                    _ => {}
                 }
+                // Regular character input
+                (KeyCode::Char(c), false, false) => {
+                    let byte_off = Self::char_to_byte(&input, cursor_pos);
+                    input.insert(byte_off, c);
+                    cursor_pos += 1;
+                }
+                _ => {}
             }
         }
     }
