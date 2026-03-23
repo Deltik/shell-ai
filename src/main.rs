@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::path::Path;
 
 mod backend;
@@ -14,46 +14,52 @@ mod render;
 mod suggest;
 mod ui;
 
-use crate::config::{AppConfig, CliOverrides, DebugLevel, OutputFormat, PreviewMode};
+use crate::config::{AppConfig, CliOverrides, DebugLevel, Frontend, OutputFormat, PreviewMode, Provider};
 
-/// Global options available on all commands.
+/// Options available on all commands.
 #[derive(Parser, Debug, Clone, Default)]
 pub struct GlobalOptions {
-    /// Provider override (openai, azure, groq, mistral, ollama, anthropic, claudecode)
-    #[arg(long = "provider", global = true)]
-    pub provider: Option<String>,
+    /// Output format
+    #[arg(long = "output-format", global = true, value_enum)]
+    pub output_format: Option<OutputFormat>,
+
+    /// Enable debug output (prints debug info to stderr).
+    /// Use --debug for debug level, --debug=trace for trace level
+    #[arg(long = "debug", short = 'd', global = true, value_enum, value_name = "LEVEL", num_args = 0..=1, default_missing_value = "debug", require_equals = true)]
+    pub debug: Option<DebugLevel>,
+}
+
+/// Configuration overrides for AI-related settings.
+/// Flattened only into subcommands that use them.
+#[derive(Parser, Debug, Clone, Default)]
+#[command(next_help_heading = "Configuration Overrides")]
+pub struct ConfigOverrides {
+    /// Provider override
+    #[arg(long = "provider", value_enum)]
+    pub provider: Option<Provider>,
 
     /// Model override (provider-specific)
-    #[arg(long = "model", global = true)]
+    #[arg(long = "model")]
     pub model: Option<String>,
 
     /// Max tokens for an AI completion
-    #[arg(long = "max-tokens", global = true)]
+    #[arg(long = "max-tokens")]
     pub max_tokens: Option<u32>,
 
     /// Sampling temperature override
-    #[arg(long = "temperature", global = true)]
+    #[arg(long = "temperature")]
     pub temperature: Option<f32>,
 
-    /// Frontend mode: automatic (default), dialog, readline, or noninteractive
-    #[arg(long = "frontend", global = true)]
-    pub frontend: Option<String>,
+    /// Frontend mode
+    #[arg(long = "frontend", value_enum)]
+    pub frontend: Option<Frontend>,
 
-    /// Output format: human, json
-    #[arg(long = "output-format", global = true)]
-    pub output_format: Option<String>,
-
-    /// Maximum preview display mode (minimal, compact, full)
-    #[arg(long = "preview-mode", short = 'P', global = true, value_enum)]
+    /// Maximum preview display mode
+    #[arg(long = "preview-mode", short = 'P', value_enum)]
     pub preview_mode: Option<PreviewMode>,
 
-    /// Enable debug output (prints debug info to stderr).
-    /// Use --debug for debug level, --debug=trace for trace level.
-    #[arg(long = "debug", short = 'd', global = true, value_enum, value_name = "LEVEL", num_args = 0..=1, default_missing_value = "debug", require_equals = true)]
-    pub debug: Option<DebugLevel>,
-
     /// Language/locale for AI responses (auto-detected by default, empty string to disable)
-    #[arg(long = "locale", global = true)]
+    #[arg(long = "locale")]
     pub locale: Option<String>,
 }
 
@@ -87,11 +93,14 @@ struct ShaiCli {
     #[command(flatten)]
     global: GlobalOptions,
 
-    /// Enable context mode: sends previous command output to the AI for contextual follow-up suggestions. Note: output is sent to your AI provider.
+    #[command(flatten)]
+    overrides: ConfigOverrides,
+
+    /// Enable context mode: sends previous command output to the AI for contextual follow-up suggestions. Note: output is sent to your AI provider
     #[arg(long = "ctx")]
     ctx: bool,
 
-    /// Prompt describing what you want to do.
+    /// Prompt describing what you want to do
     #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
     prompt: Vec<String>,
 }
@@ -99,57 +108,150 @@ struct ShaiCli {
 /// Top-level subcommands for the Shell-AI CLI.
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Suggest shell commands from a natural-language description.
+    /// Suggest shell commands from a natural-language description
     Suggest(SuggestArgs),
 
-    /// Explain an existing shell command using an OpenAI-compatible API.
+    /// Explain a shell command in plain language
     Explain(ExplainArgs),
 
-    /// Configuration management.
+    /// Show, initialize, or inspect configuration
     Config(ConfigArgs),
 
-    /// Generate shell integration scripts (completions, aliases, keybindings).
+    /// Generate shell integration scripts (completions, aliases, keybindings)
     Integration(integration::IntegrationArgs),
 }
 
 #[derive(Parser, Debug)]
 struct ConfigArgs {
+    #[command(flatten)]
+    overrides: ConfigOverrides,
+
     #[command(subcommand)]
     action: Option<ConfigAction>,
 }
 
 #[derive(Subcommand, Debug)]
 enum ConfigAction {
-    /// Generate a documented example config.toml.
+    /// Generate a documented example config.toml
     Init(ConfigInitArgs),
 
-    /// Show configuration schema (descriptions of all settings).
+    /// Show configuration schema (descriptions of all settings)
     Schema,
 }
 
 #[derive(Parser, Debug)]
 struct ConfigInitArgs {
-    /// Print to stdout instead of writing to file.
+    /// Print to stdout instead of writing to file
     #[arg(long = "stdout")]
     stdout: bool,
 }
 
 #[derive(Parser, Debug)]
+#[command(after_long_help = "\
+Examples:\n  \
+  shell-ai suggest -- 'list files larger than 100MB'\n  \
+  shell-ai suggest -- find and kill process on port 8080")]
 struct SuggestArgs {
-    /// Enable context mode: sends previous command output to the AI for contextual follow-up suggestions. Note: output is sent to your AI provider.
+    /// Enable context mode: sends previous command output to the AI for contextual follow-up suggestions. Note: output is sent to your AI provider
     #[arg(long = "ctx")]
     ctx: bool,
 
-    /// Prompt describing what you want to do.
+    /// Prompt describing what you want to do
     #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
     prompt: Vec<String>,
+
+    #[command(flatten)]
+    overrides: ConfigOverrides,
 }
 
 #[derive(Parser, Debug)]
+#[command(after_long_help = "\
+Examples:\n  \
+  shell-ai explain -- tar -xzf archive.tar.gz\n  \
+  shell-ai explain -- 'find . -name \"*.log\" -mtime +7 -delete'\n  \
+  history | tail -1 | shell-ai explain")]
 struct ExplainArgs {
-    /// Command to explain. If omitted and stdin is piped, read from stdin.
+    /// Command to explain. If omitted and stdin is piped, read from stdin
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     command: Vec<String>,
+
+    #[command(flatten)]
+    overrides: ConfigOverrides,
+}
+
+/// Apply runtime help text to subcommand trees.
+fn augment_subcommand_help(cmd: clap::Command) -> clap::Command {
+    let toml_path = config::toml_config_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<unknown>".to_string());
+    let json_path = config::json_config_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<unknown>".to_string());
+
+    let config_long_about = "Show, initialize, or inspect configuration.\n\n\
+         When run without a subcommand, displays the active configuration \
+         with the source of each value (default, toml, json, env, cli).".to_string();
+    let init_long_about = format!(
+        "Generate a documented example config.toml.\n\n\
+         Writes to {toml_path} by default.\n\
+         A legacy JSON config at {json_path} is also loaded if present, \
+         but the TOML file takes precedence."
+    );
+
+    cmd.mut_subcommand("config", |config_cmd| {
+        config_cmd
+            .long_about(config_long_about)
+            .after_long_help(
+                "Examples:\n  \
+                 shell-ai config\n  \
+                 shell-ai config init\n  \
+                 shell-ai config init --stdout\n  \
+                 shell-ai config schema",
+            )
+            .mut_subcommand("init", |init_cmd| init_cmd.long_about(init_long_about))
+    })
+    .mut_subcommand("integration", |int_cmd| {
+        int_cmd
+            .after_long_help(
+                "Examples:\n  \
+                 shell-ai integration generate bash\n  \
+                 shell-ai integration generate zsh --preset full\n  \
+                 shell-ai integration list\n  \
+                 shell-ai integration update",
+            )
+            .mut_subcommand("generate", |gen_cmd| {
+                gen_cmd.after_long_help(
+                    "Examples:\n  \
+                     shell-ai integration generate bash\n  \
+                     shell-ai integration generate zsh --preset full\n  \
+                     shell-ai integration generate fish --add keybinding\n  \
+                     shell-ai integration generate bash --remove aliases --stdout",
+                )
+            })
+    })
+}
+
+/// Check if an executable named `shai` exists in PATH.
+fn shai_in_path() -> bool {
+    let name = if cfg!(windows) { "shai.exe" } else { "shai" };
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                let path = dir.join(name);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    path.metadata()
+                        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                        .unwrap_or(false)
+                }
+                #[cfg(not(unix))]
+                {
+                    path.is_file()
+                }
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Check if we were invoked as `shai` (shorthand for suggest)
@@ -164,18 +266,28 @@ fn invoked_as_shai() -> bool {
         .unwrap_or(false)
 }
 
-/// Convert global CLI options to CliOverrides for config loading.
-fn global_to_cli_overrides(global: &GlobalOptions) -> CliOverrides {
+/// Build CliOverrides from global options and optional per-subcommand config overrides.
+fn build_cli_overrides(global: &GlobalOptions, overrides: Option<&ConfigOverrides>) -> CliOverrides {
     CliOverrides {
-        provider: global.provider.clone(),
-        model: global.model.clone(),
-        max_tokens: global.max_tokens,
-        temperature: global.temperature,
-        frontend: global.frontend.clone(),
-        output_format: global.output_format.clone(),
-        preview_mode: global.preview_mode,
+        provider: overrides.and_then(|o| o.provider.map(|p| p.to_string())),
+        model: overrides.and_then(|o| o.model.clone()),
+        max_tokens: overrides.and_then(|o| o.max_tokens),
+        temperature: overrides.and_then(|o| o.temperature),
+        frontend: overrides.and_then(|o| o.frontend.map(|f| f.to_string())),
+        output_format: global.output_format.map(|o| o.to_string()),
+        preview_mode: overrides.and_then(|o| o.preview_mode),
         debug: global.debug,
-        locale: global.locale.clone(),
+        locale: overrides.and_then(|o| o.locale.clone()),
+    }
+}
+
+/// Extract ConfigOverrides from the active subcommand, if present.
+fn extract_config_overrides(command: &Command) -> Option<&ConfigOverrides> {
+    match command {
+        Command::Suggest(args) => Some(&args.overrides),
+        Command::Explain(args) => Some(&args.overrides),
+        Command::Config(args) => Some(&args.overrides),
+        Command::Integration(_) => None,
     }
 }
 
@@ -189,15 +301,26 @@ async fn main() -> Result<()> {
         Cli {
             global: args.global,
             command: Command::Suggest(SuggestArgs {
+                overrides: args.overrides,
                 ctx: args.ctx,
                 prompt: args.prompt,
             }),
         }
     } else {
-        Cli::parse()
+        let mut cmd = Cli::command();
+        if !shai_in_path() {
+            cmd = cmd.after_long_help("\
+Tip: Create a symlink or copy named 'shai' for a shorthand that goes \
+straight to suggest mode:\n\n  \
+  ln -s shell-ai shai\n  \
+  shai -- 'list files larger than 100MB'");
+        }
+        cmd = augment_subcommand_help(cmd);
+        let matches = cmd.get_matches();
+        Cli::from_arg_matches(&matches)?
     };
 
-    let cli_overrides = global_to_cli_overrides(&cli.global);
+    let cli_overrides = build_cli_overrides(&cli.global, extract_config_overrides(&cli.command));
     let config = AppConfig::load_with_cli(cli_overrides);
     logger::set_debug(config.debug.value);
 

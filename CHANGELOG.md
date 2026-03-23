@@ -7,6 +7,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.2 (UNRELEASED)
+
+### Changed
+
+- **Overhauled CLI help pages for standalone usability**
+
+  The help output is now designed to be self-sufficient without consulting external documentation:
+
+  - `explain` subcommand description no longer mentions "OpenAI-compatible API" — now reads "Explain a shell command in plain language"
+  - `--provider`, `--frontend`, and `--output-format` are now proper `ValueEnum` types, so clap validates input and lists possible values in help
+  - Usage examples added to `suggest`, `explain`, `config`, `integration`, and `integration generate` (visible in `--help` but not `-h`)
+  - `config` help now explains that bare `shell-ai config` shows the active configuration
+  - `config init` help now shows the platform-specific config file paths and mentions legacy JSON config precedence
+  - Tip about the `shai` shorthand shown in `--help` (conditionally hidden when `shai` is already in PATH)
+  - `-h` (short) vs `--help` (long) now meaningfully differ: `-h` is concise, `--help` includes examples, expanded descriptions, and value explanations
+
+- **Restructured CLI option grouping**
+
+  AI configuration overrides (`--provider`, `--model`, `--max-tokens`, `--temperature`, `--frontend`, `--preview-mode`, `--locale`) are now shown under a "Configuration Overrides" heading and only appear on subcommands that use them (`suggest`, `explain`, `config`). Utility subcommands like `config schema`, `config init`, `integration list`, etc. no longer show irrelevant AI options.
+
+  `--output-format` and `--debug` remain available on all subcommands.
+
+  **Breaking:** Configuration overrides must now be placed _after_ the subcommand, not before it. For example, `shell-ai --provider openai suggest` must be written as `shell-ai suggest --provider openai`. The `shai` shorthand is unaffected.
+
 ## v0.6.1 (2026-03-23)
 
 ### Added

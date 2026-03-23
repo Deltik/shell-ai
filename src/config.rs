@@ -76,35 +76,40 @@ impl<T> ConfigValue<T> {
 }
 
 /// Frontend interaction mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, EnumString, EnumIter, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, EnumString, EnumIter, Deserialize, Serialize, clap::ValueEnum)]
 #[strum(serialize_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
 pub enum Frontend {
-    /// Automatic frontend selection based on context (TTY, output format).
+    /// Automatic frontend selection based on context
     #[default]
     Automatic,
-    /// Interactive dialog with arrow-key navigation.
+    /// Interactive dialog with arrow-key navigation
     Dialog,
-    /// Text-based readline interface.
+    /// Text-based readline interface
     Readline,
-    /// Non-interactive mode for scripting/automation.
+    /// Non-interactive mode for scripting/automation
     Noninteractive,
 }
 
 /// Output format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, EnumString, EnumIter, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, EnumString, EnumIter, Deserialize, Serialize, clap::ValueEnum)]
 #[strum(serialize_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
 pub enum OutputFormat {
+    /// Human-readable output (default)
     #[default]
     Human,
+    /// Machine-readable JSON output
     Json,
 }
 
 /// Supported providers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, EnumString, EnumIter, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, EnumString, EnumIter, Deserialize, Serialize, clap::ValueEnum)]
 #[strum(serialize_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
 pub enum Provider {
     #[serde(alias = "openai")]
     OpenAI,
@@ -119,6 +124,7 @@ pub enum Provider {
     #[serde(alias = "anthropic")]
     Anthropic,
     #[serde(alias = "claudecode", alias = "claude-code", alias = "claude_code")]
+    #[clap(alias = "claude-code")]
     ClaudeCode,
 }
 

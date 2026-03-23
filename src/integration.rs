@@ -30,11 +30,11 @@ pub struct IntegrationArgs {
 /// Integration subcommand actions.
 #[derive(Subcommand, Debug)]
 pub enum IntegrationAction {
-    /// Generate a new integration script.
+    /// Generate a new integration script
     Generate(IntegrationGenerateArgs),
-    /// Update existing integration script(s) using stored preferences.
+    /// Update existing integration script(s) using stored preferences
     Update(IntegrationUpdateArgs),
-    /// Show available features, presets, and installed integrations.
+    /// Show available features, presets, and installed integrations
     List,
 }
 
@@ -48,26 +48,26 @@ pub struct IntegrationGenerateArgs {
     #[arg(long, short = 'p', default_value = "standard")]
     pub preset: Preset,
 
-    /// Add feature(s) on top of preset. Can be specified multiple times.
+    /// Add feature(s) on top of preset. Can be specified multiple times
     #[arg(long = "add", short = 'a', value_name = "FEATURE")]
     pub add_features: Vec<Feature>,
 
-    /// Remove feature(s) from preset. Can be specified multiple times.
+    /// Remove feature(s) from preset. Can be specified multiple times
     #[arg(long = "remove", short = 'r', value_name = "FEATURE")]
     pub remove_features: Vec<Feature>,
 
-    /// Print to stdout instead of writing to file.
+    /// Print to stdout instead of writing to file
     #[arg(long)]
     pub stdout: bool,
 
-    /// Overwrite existing file without confirmation.
+    /// Overwrite existing file without confirmation
     #[arg(long, short = 'y')]
     pub overwrite: bool,
 }
 
 #[derive(Parser, Debug)]
 pub struct IntegrationUpdateArgs {
-    /// Target shell. If omitted, updates all existing integration files.
+    /// Target shell. If omitted, updates all existing integration files
     #[arg(value_enum)]
     pub shell: Option<ShellType>,
 }
