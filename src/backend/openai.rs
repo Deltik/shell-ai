@@ -64,8 +64,10 @@ impl OpenAiBackend {
     fn build_payload(&self, request: &CompletionRequest, stream: bool) -> serde_json::Value {
         let mut messages: Vec<serde_json::Value> = Vec::new();
 
-        for sys_msg in &request.system_messages {
-            messages.push(json!({"role": "system", "content": sys_msg}));
+        // Merge all system messages into one with \n\n separator (required for Jinja-based models)
+        if !request.system_messages.is_empty() {
+            let merged_system = request.system_messages.join("\n\n");
+            messages.push(json!({"role": "system", "content": merged_system}));
         }
 
         // History + final user message
@@ -170,5 +172,111 @@ impl Backend for OpenAiBackend {
 
         // This should be unreachable, but just in case
         Err(BackendError::RateLimited("Max retries exceeded".to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_payload_merges_system_messages() {
+        let backend = OpenAiBackend::new(
+            "https://api.openai.com/v1/chat/completions".to_string(),
+            "gpt-4".to_string(),
+            Some("sk-test".to_string()),
+            vec![],
+            0.5,
+            Some(1000),
+        );
+
+        let request = CompletionRequest {
+            system_messages: vec![
+                "First system message".to_string(),
+                "Second system message".to_string(),
+                "Third system message".to_string(),
+            ],
+            message_history: vec![],
+            user_message: "Hello".to_string(),
+            json_schema: None,
+            schema_name: "test".to_string(),
+        };
+
+        let payload = backend.build_payload(&request, false);
+        let messages = &payload["messages"];
+
+        // Should have exactly 2 messages: 1 system + 1 user
+        assert_eq!(messages.as_array().unwrap().len(), 2);
+
+        // First message should be system with all content merged
+        let system_msg = &messages.as_array().unwrap()[0];
+        assert_eq!(system_msg["role"], "system");
+        let expected_content = "First system message\n\nSecond system message\n\nThird system message";
+        assert_eq!(system_msg["content"], expected_content);
+
+        // Second message should be user
+        let user_msg = &messages.as_array().unwrap()[1];
+        assert_eq!(user_msg["role"], "user");
+        assert_eq!(user_msg["content"], "Hello");
+    }
+
+    #[test]
+    fn test_build_payload_single_system_message() {
+        let backend = OpenAiBackend::new(
+            "https://api.openai.com/v1/chat/completions".to_string(),
+            "gpt-4".to_string(),
+            Some("sk-test".to_string()),
+            vec![],
+            0.5,
+            Some(1000),
+        );
+
+        let request = CompletionRequest {
+            system_messages: vec!["Single system message".to_string()],
+            message_history: vec![],
+            user_message: "Hello".to_string(),
+            json_schema: None,
+            schema_name: "test".to_string(),
+        };
+
+        let payload = backend.build_payload(&request, false);
+        let messages = &payload["messages"];
+
+        // Should have exactly 2 messages: 1 system + 1 user
+        assert_eq!(messages.as_array().unwrap().len(), 2);
+
+        let system_msg = &messages.as_array().unwrap()[0];
+        assert_eq!(system_msg["role"], "system");
+        assert_eq!(system_msg["content"], "Single system message");
+    }
+
+    #[test]
+    fn test_build_payload_no_system_messages() {
+        let backend = OpenAiBackend::new(
+            "https://api.openai.com/v1/chat/completions".to_string(),
+            "gpt-4".to_string(),
+            Some("sk-test".to_string()),
+            vec![],
+            0.5,
+            Some(1000),
+        );
+
+        let request = CompletionRequest {
+            system_messages: vec![],
+            message_history: vec![],
+            user_message: "Hello".to_string(),
+            json_schema: None,
+            schema_name: "test".to_string(),
+        };
+
+        let payload = backend.build_payload(&request, false);
+        let messages = &payload["messages"];
+
+        // Should have exactly 1 message: user only
+        assert_eq!(messages.as_array().unwrap().len(), 1);
+
+        let user_msg = &messages.as_array().unwrap()[0];
+        assert_eq!(user_msg["role"], "user");
+        assert_eq!(user_msg["content"], "Hello");
     }
 }

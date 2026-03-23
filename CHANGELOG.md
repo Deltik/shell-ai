@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Merged system messages into one for OpenAI-compatible backends** ([#3](https://github.com/Deltik/shell-ai/pull/3))
+
+  Models served through Jinja-based chat templates (e.g., `qwen3.5` via Ollama) only accept a single system message. Multiple system messages are now merged with `\n\n` separators before sending, matching the existing Anthropic backend behavior. Credit to [@alanjds](https://github.com/alanjds) for the contribution.
+
 - **Arrow keys moved two options at a time on Windows** ([#2](https://github.com/Deltik/shell-ai/issues/2))
 
   On Windows, crossterm reports both key press and key release events. The UI event loops now filter for press and repeat events only, fixing double-input on Windows while preserving key-repeat behavior.
