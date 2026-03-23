@@ -117,8 +117,9 @@ Shell-AI loads configuration from multiple sources (highest priority first):
 
 1. CLI flags (`--provider`, `--model`, etc.)
 2. Environment variables (`SHAI_API_PROVIDER`, `OPENAI_API_KEY`, etc.)
-3. Config file (see paths below)
-4. Built-in defaults
+3. Legacy JSON config file (`config.json`, same directory as TOML config file; see below)
+4. TOML config file (`config.toml`; see paths below)
+5. Built-in defaults
 
 Config file locations:
 - **Linux**: `~/.config/shell-ai/config.toml`
@@ -140,6 +141,36 @@ provider = "openai"
 api_key = "sk-..."
 model = "gpt-4o"
 ```
+
+<details>
+<summary>Legacy JSON config (from ricklamers/shell-ai)</summary>
+
+A `config.json` in the same directory is also supported for compatibility with [ricklamers/shell-ai](https://github.com/ricklamers/shell-ai). It uses environment variable names as keys in a flat JSON object:
+
+```json
+{
+  "SHAI_API_PROVIDER": "openai",
+  "OPENAI_API_KEY": "sk-..."
+}
+```
+
+TOML-style keys also work in the JSON file:
+
+```json
+{
+  "provider": "openai",
+  "openai": {
+    "api_key": "sk-...",
+    "model": "gpt-4o"
+  }
+}
+```
+
+When both styles set the same setting, env-var-style keys take precedence.
+
+The JSON file takes precedence over the TOML file (matching how environment variables override config files). Settings from the TOML file still apply for anything not set in the JSON file.
+
+</details>
 
 ### Providers
 

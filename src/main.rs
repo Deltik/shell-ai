@@ -194,8 +194,8 @@ fn augment_subcommand_help(cmd: clap::Command) -> clap::Command {
     let init_long_about = format!(
         "Generate a documented example config.toml.\n\n\
          Writes to {toml_path} by default.\n\
-         A legacy JSON config at {json_path} is also loaded if present, \
-         but the TOML file takes precedence."
+         A legacy JSON config at {json_path} is also loaded if present \
+         and takes precedence over the TOML file."
     );
 
     cmd.mut_subcommand("config", |config_cmd| {

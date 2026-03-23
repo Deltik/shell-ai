@@ -1211,10 +1211,13 @@ impl AppConfig {
             }
         }
 
-        // Layer 3: JSON config (legacy)
+        // Layer 3: JSON config (legacy, overrides TOML)
+        // Supports both TOML-style keys ("provider") and env-var-style keys ("SHAI_API_PROVIDER").
+        // Env-var-style keys take precedence over TOML-style keys within the JSON file.
         match load_json_as_value() {
             JsonValueLoadResult::Loaded(json, path) => {
                 json_path = Some(path);
+                let json = remap_json_env_keys(json);
                 builder.merge_layer(&json, ConfigSource::JsonFile);
             }
             JsonValueLoadResult::NotFound => {}
@@ -2110,6 +2113,57 @@ fn toml_to_json(toml: &toml::Value) -> serde_json::Value {
     }
 }
 
+/// Remap environment-variable-style keys in a JSON object to config paths.
+///
+/// Legacy JSON configs (from ricklamers/shell-ai) use env var names as keys,
+/// e.g. `{"OPENAI_API_KEY": "sk-...", "SHAI_API_PROVIDER": "openai"}`.
+/// This function translates those to the internal config paths like
+/// `{"openai": {"api_key": "sk-..."}, "provider": "openai"}`.
+///
+/// Keys that already match config paths (TOML-style) are left unchanged,
+/// so both formats work. When both styles set the same setting,
+/// env-var-style keys take precedence (matching real env var behavior).
+fn remap_json_env_keys(value: serde_json::Value) -> serde_json::Value {
+    let obj = match value {
+        serde_json::Value::Object(obj) => obj,
+        other => return other,
+    };
+
+    // Build env var name -> config path mapping from metadata
+    let mut env_to_path: HashMap<&str, String> = HashMap::new();
+    for field in GLOBAL_SETTINGS_METADATA {
+        if let Some(env_var) = field.env_var {
+            env_to_path.insert(env_var, field.name.to_string());
+        }
+        for alias in field.env_aliases {
+            env_to_path.insert(alias, field.name.to_string());
+        }
+    }
+    for provider in PROVIDER_METADATA {
+        for field in provider.all_fields() {
+            if let Some(env_var) = field.env_var {
+                env_to_path.insert(env_var, format!("{}.{}", provider.name, field.name));
+            }
+        }
+    }
+
+    // Two passes: TOML-style keys first, then env-var-style keys overwrite.
+    // This gives env-var-style keys precedence (matching real env var behavior).
+    let mut result = serde_json::Map::new();
+    for (key, value) in &obj {
+        if !env_to_path.contains_key(key.as_str()) {
+            result.insert(key.clone(), value.clone());
+        }
+    }
+    for (key, value) in &obj {
+        if let Some(config_path) = env_to_path.get(key.as_str()) {
+            ConfigBuilder::set_nested_value(&mut result, config_path, value.clone());
+        }
+    }
+
+    serde_json::Value::Object(result)
+}
+
 fn load_json_as_value() -> JsonValueLoadResult {
     let path = match json_config_path() {
         Some(p) => p,
@@ -2161,5 +2215,162 @@ pub fn resolve_locale(config_value: Option<&str>) -> Option<String> {
         None => detect_system_locale(),  // Auto-detect by default
         Some("") => None,                 // Empty string disables
         Some(locale) => Some(locale.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── remap_json_env_keys ──────────────────────────────────────────
+
+    #[test]
+    fn test_remap_env_style_keys() {
+        let input = json!({"SHAI_API_PROVIDER": "openai", "OPENAI_API_KEY": "sk-test"});
+        let result = remap_json_env_keys(input);
+        assert_eq!(result["provider"], "openai");
+        assert_eq!(result["openai"]["api_key"], "sk-test");
+    }
+
+    #[test]
+    fn test_remap_toml_style_passthrough() {
+        let input = json!({"provider": "anthropic", "anthropic": {"api_key": "sk-ant"}});
+        let result = remap_json_env_keys(input);
+        assert_eq!(result["provider"], "anthropic");
+        assert_eq!(result["anthropic"]["api_key"], "sk-ant");
+    }
+
+    #[test]
+    fn test_remap_env_style_beats_toml_style() {
+        // Env-var-style key should win over TOML-style key for the same setting
+        let input = json!({"provider": "anthropic", "SHAI_API_PROVIDER": "openai"});
+        let result = remap_json_env_keys(input);
+        assert_eq!(result["provider"], "openai");
+    }
+
+    #[test]
+    fn test_remap_env_alias() {
+        // SHAI_PROVIDER is an alias for SHAI_API_PROVIDER
+        let input = json!({"SHAI_PROVIDER": "ollama"});
+        let result = remap_json_env_keys(input);
+        assert_eq!(result["provider"], "ollama");
+    }
+
+    #[test]
+    fn test_remap_non_object_passthrough() {
+        let input = json!("just a string");
+        let result = remap_json_env_keys(input.clone());
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_remap_unknown_keys_preserved() {
+        let input = json!({"UNKNOWN_KEY": "value", "provider": "openai"});
+        let result = remap_json_env_keys(input);
+        assert_eq!(result["UNKNOWN_KEY"], "value");
+        assert_eq!(result["provider"], "openai");
+    }
+
+    // ── ConfigBuilder merge layer ordering ───────────────────────────
+
+    #[test]
+    fn test_merge_later_layer_overrides_earlier() {
+        let mut builder = ConfigBuilder::new();
+        builder.merge_layer(&json!({"provider": "openai"}), ConfigSource::TomlFile);
+        builder.merge_layer(&json!({"provider": "anthropic"}), ConfigSource::JsonFile);
+
+        assert_eq!(builder.config["provider"], "anthropic");
+        assert_eq!(
+            builder.sources.get("provider"),
+            Some(&ConfigSource::JsonFile)
+        );
+    }
+
+    #[test]
+    fn test_merge_earlier_values_survive_when_not_overridden() {
+        let mut builder = ConfigBuilder::new();
+        builder.merge_layer(
+            &json!({"provider": "openai", "model": "gpt-4"}),
+            ConfigSource::TomlFile,
+        );
+        builder.merge_layer(&json!({"provider": "anthropic"}), ConfigSource::JsonFile);
+
+        assert_eq!(builder.config["provider"], "anthropic");
+        assert_eq!(builder.config["model"], "gpt-4");
+        assert_eq!(
+            builder.sources.get("model"),
+            Some(&ConfigSource::TomlFile)
+        );
+    }
+
+    // ── Full precedence chain ────────────────────────────────────────
+
+    #[test]
+    fn test_full_precedence_order() {
+        // Simulate the 5-layer precedence: default < toml < json < env < cli
+        let mut builder = ConfigBuilder::new();
+
+        // Layer 1: defaults
+        builder.merge_layer(
+            &json!({
+                "provider": "groq",
+                "model": "default-model",
+                "temperature": "0.05",
+                "frontend": "automatic",
+                "suggestion_count": "3"
+            }),
+            ConfigSource::Default,
+        );
+
+        // Layer 2: TOML overrides provider and model
+        builder.merge_layer(
+            &json!({"provider": "openai", "model": "toml-model"}),
+            ConfigSource::TomlFile,
+        );
+
+        // Layer 3: JSON overrides provider (env-var-style key, remapped)
+        let json_input = json!({"SHAI_API_PROVIDER": "anthropic"});
+        let json_remapped = remap_json_env_keys(json_input);
+        builder.merge_layer(&json_remapped, ConfigSource::JsonFile);
+
+        // Layer 4: env overrides model
+        builder.merge_layer(
+            &json!({"model": "env-model"}),
+            ConfigSource::Environment,
+        );
+
+        // Layer 5: CLI overrides temperature
+        builder.merge_layer(
+            &json!({"temperature": "0.9"}),
+            ConfigSource::Cli,
+        );
+
+        // Verify each field was set by the highest-priority source
+        assert_eq!(builder.config["provider"], "anthropic"); // json beat toml
+        assert_eq!(
+            builder.sources.get("provider"),
+            Some(&ConfigSource::JsonFile)
+        );
+
+        assert_eq!(builder.config["model"], "env-model"); // env beat toml
+        assert_eq!(
+            builder.sources.get("model"),
+            Some(&ConfigSource::Environment)
+        );
+
+        assert_eq!(builder.config["temperature"], "0.9"); // cli beat default
+        assert_eq!(
+            builder.sources.get("temperature"),
+            Some(&ConfigSource::Cli)
+        );
+
+        assert_eq!(builder.config["frontend"], "automatic"); // untouched default
+        assert_eq!(
+            builder.sources.get("frontend"),
+            Some(&ConfigSource::Default)
+        );
+
+        assert_eq!(builder.config["suggestion_count"], "3"); // untouched default
     }
 }

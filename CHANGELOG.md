@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Breaking:** Configuration overrides must now be placed _after_ the subcommand, not before it. For example, `shell-ai --provider openai suggest` must be written as `shell-ai suggest --provider openai`. The `shai` shorthand is unaffected.
 
+### Fixed
+
+- **Legacy JSON config with environment variable keys now works**
+
+  The JSON config file (`config.json`) inherited from [ricklamers/shell-ai](https://github.com/ricklamers/shell-ai) uses environment variable names as keys (e.g. `OPENAI_API_KEY`, `SHAI_API_PROVIDER`). These keys were silently ignored since v0.5.0. They are now remapped to the internal config paths so both legacy env-var-style keys and TOML-style keys work. When both styles set the same setting, env-var-style keys take precedence.
+
 ## v0.6.1 (2026-03-23)
 
 ### Added
