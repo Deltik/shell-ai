@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use colored::Colorize;
 use is_terminal::IsTerminal;
 use serde::{Deserialize, Serialize};
@@ -7,7 +7,8 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::backend::{Backend, BackendError, CompletionRequest, StreamCallback, StreamEvent};
+use crate::backend::{Backend, BackendError, CompletionRequest, CompletionResponse, StreamAction, StreamEvent};
+use crate::backend::correction::complete_with_correction;
 use crate::config::{resolve_locale, OutputFormat, ValidatedConfig};
 use crate::preview::StreamingPreview;
 use crate::progress::Progress;
@@ -472,10 +473,17 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
 
         let request = CompletionRequest {
             system_messages,
+            message_history: vec![],
             user_message: command_to_explain.to_string(),
             json_schema: Some(schema_value),
             schema_name: "command_explanation".to_string(),
         };
+
+        fn parse_explanation(resp: &CompletionResponse) -> Result<ExplainResult, String> {
+            log::trace!("Raw model response ({} chars):\n{}", resp.content.len(), resp.content);
+            serde_json::from_str::<ExplainResult>(&resp.content)
+                .map_err(|e| format!("Failed to parse explanation JSON: {}", e))
+        }
 
         // Try to create streaming preview (None if not TTY)
         let mut preview = StreamingPreview::new(config.preview_mode.value)?;
@@ -489,79 +497,93 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
             let thinking_start_handle = preview.thinking_start_handle();
             let thinking_total_secs_handle = preview.thinking_total_secs_handle();
 
-            let callback: StreamCallback = Box::new(move |event| {
-                use crate::preview::{append_chunk, ChunkType};
-                match event {
-                    StreamEvent::TextDelta(text) => {
-                        // Clear status when we start receiving content (retry succeeded)
-                        if let Ok(mut status) = status_handle.lock() {
-                            *status = None;
-                        }
-                        let text_chars = text.chars().count();
-                        if let Ok(mut chunks) = chunks_handle.lock() {
-                            append_chunk(&mut chunks, ChunkType::Content, text);
-                        }
-                        if let Ok(mut count) = char_count_handle.lock() {
-                            *count += text_chars;
-                        }
-                        // Transition out of thinking
-                        if let Ok(mut thinking) = is_thinking_handle.lock() {
-                            if *thinking {
-                                *thinking = false;
-                                if let Ok(mut start) = thinking_start_handle.lock() {
-                                    if let Some(s) = start.take() {
-                                        if let Ok(mut total) =
-                                            thinking_total_secs_handle.lock()
-                                        {
-                                            *total += s.elapsed().as_secs_f64();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    StreamEvent::Preamble(text) => {
-                        // Clear status when we start receiving content (retry succeeded)
-                        if let Ok(mut status) = status_handle.lock() {
-                            *status = None;
-                        }
-                        let text_chars = text.chars().count();
-                        if let Ok(mut chunks) = chunks_handle.lock() {
-                            append_chunk(&mut chunks, ChunkType::Preamble, text);
-                        }
-                        if let Ok(mut count) = char_count_handle.lock() {
-                            *count += text_chars;
-                        }
-                        // Mark thinking as active
-                        if let Ok(mut thinking) = is_thinking_handle.lock() {
-                            if !*thinking {
-                                *thinking = true;
-                                if let Ok(mut start) = thinking_start_handle.lock() {
-                                    *start = Some(Instant::now());
-                                }
-                            }
-                        }
-                    }
-                    StreamEvent::Backoff { attempt, delay_ms } => {
-                        if let Ok(mut status) = status_handle.lock() {
-                            let secs = delay_ms as f64 / 1000.0;
-                            *status = Some(format!("backoff #{}, {:.1}s", attempt, secs));
-                        }
-                    }
-                    StreamEvent::Retrying { attempt } => {
-                        if let Ok(mut status) = status_handle.lock() {
-                            *status = Some(format!("retry #{}", attempt));
-                        }
-                    }
-                }
-            });
-
             let backend_clone = Arc::clone(&backend);
             let request_clone = request.clone();
 
-            // Spawn the blocking backend call
+            // Spawn the blocking backend call with correction harness
             let task = tokio::task::spawn_blocking(move || {
-                backend_clone.complete_streaming(&request_clone, callback)
+                complete_with_correction(
+                    &*backend_clone,
+                    &request_clone,
+                    2,
+                    |attempt| {
+                        // On correction retry, clear visual content but keep char count
+                        // (so the user can see that work was done)
+                        if attempt.attempt > 0 {
+                            if let Ok(mut chunks) = chunks_handle.lock() {
+                                chunks.clear();
+                            }
+                            if let Ok(mut status) = status_handle.lock() {
+                                *status = Some(format!(
+                                    "correcting response ({}/{})",
+                                    attempt.attempt, attempt.max_retries
+                                ));
+                            }
+                        }
+
+                        let chunks = chunks_handle.clone();
+                        let char_count = char_count_handle.clone();
+                        let status = status_handle.clone();
+                        let is_thinking = is_thinking_handle.clone();
+                        let thinking_start = thinking_start_handle.clone();
+                        let thinking_total = thinking_total_secs_handle.clone();
+
+                        Box::new(move |event| {
+                            use crate::preview::{append_chunk, ChunkType};
+                            match event {
+                                StreamEvent::TextDelta(text) => {
+                                    if let Ok(mut s) = status.lock() { *s = None; }
+                                    let text_chars = text.chars().count();
+                                    if let Ok(mut c) = chunks.lock() {
+                                        append_chunk(&mut c, ChunkType::Content, text);
+                                    }
+                                    if let Ok(mut n) = char_count.lock() { *n += text_chars; }
+                                    if let Ok(mut t) = is_thinking.lock() {
+                                        if *t {
+                                            *t = false;
+                                            if let Ok(mut start) = thinking_start.lock() {
+                                                if let Some(s) = start.take() {
+                                                    if let Ok(mut total) = thinking_total.lock() {
+                                                        *total += s.elapsed().as_secs_f64();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                StreamEvent::Preamble(text) => {
+                                    if let Ok(mut s) = status.lock() { *s = None; }
+                                    let text_chars = text.chars().count();
+                                    if let Ok(mut c) = chunks.lock() {
+                                        append_chunk(&mut c, ChunkType::Preamble, text);
+                                    }
+                                    if let Ok(mut n) = char_count.lock() { *n += text_chars; }
+                                    if let Ok(mut t) = is_thinking.lock() {
+                                        if !*t {
+                                            *t = true;
+                                            if let Ok(mut start) = thinking_start.lock() {
+                                                *start = Some(Instant::now());
+                                            }
+                                        }
+                                    }
+                                }
+                                StreamEvent::Backoff { attempt, delay_ms } => {
+                                    if let Ok(mut s) = status.lock() {
+                                        let secs = delay_ms as f64 / 1000.0;
+                                        *s = Some(format!("backoff #{}, {:.1}s", attempt, secs));
+                                    }
+                                }
+                                StreamEvent::Retrying { attempt } => {
+                                    if let Ok(mut s) = status.lock() {
+                                        *s = Some(format!("retry #{}", attempt));
+                                    }
+                                }
+                            }
+                            StreamAction::Continue
+                        })
+                    },
+                    parse_explanation,
+                )
             });
 
             // Render loop while waiting for completion
@@ -583,7 +605,13 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
             let request_clone = request.clone();
 
             let result = tokio::task::spawn_blocking(move || {
-                backend_clone.complete(&request_clone)
+                complete_with_correction(
+                    &*backend_clone,
+                    &request_clone,
+                    2,
+                    |_| Box::new(|_| StreamAction::Continue),
+                    parse_explanation,
+                )
             }).await.map_err(|e| anyhow!("Task join error: {}", e))?;
 
             if let Some(p) = progress {
@@ -594,16 +622,11 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
         };
 
         match result {
-            Ok(response) => {
+            Ok(explanation) => {
                 // Clear streaming preview
                 if let Some(ref mut p) = preview {
                     p.finish_and_clear()?;
                 }
-
-                log::trace!("Raw model response ({} chars):\n{}", response.content.len(), response.content);
-
-                let explanation: ExplainResult = serde_json::from_str(&response.content)
-                    .context("failed to parse explanation JSON from model")?;
 
                 // Render output based on output format from config
                 match output_format {

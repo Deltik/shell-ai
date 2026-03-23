@@ -7,7 +7,8 @@ use colored::Colorize;
 use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 
-use crate::backend::{Backend, BackendError, CompletionRequest, StreamCallback, StreamEvent};
+use crate::backend::{Backend, CompletionRequest, StreamAction, StreamEvent};
+use crate::backend::correction::complete_with_correction;
 use crate::config::{resolve_locale, AppConfig, Frontend, OutputFormat, ValidatedConfig};
 use crate::explain;
 use crate::preview::SuggestProgress;
@@ -634,76 +635,81 @@ async fn suggest_once_streaming(
 
     let request = CompletionRequest {
         system_messages: vec![system_message],
+        message_history: vec![],
         user_message,
         json_schema: Some(schema_value),
         schema_name: "shell_command_suggestion".to_string(),
     };
 
-    let callback_slots = shared_slots.clone();
     let extractor = Arc::new(Mutex::new(CommandExtractor::new()));
-    let callback_extractor = extractor.clone();
-    let callback: StreamCallback = Box::new(move |event| {
-        match event {
-            StreamEvent::TextDelta(text) => {
-                if let Some(ref slots) = callback_slots {
-                    let extracted = callback_extractor.lock().unwrap().feed(&text);
-                    crate::preview::update_shared_slot(slots, slot_idx, &extracted);
-                }
-            }
-            StreamEvent::Preamble(_) => {
-                // Ignore preamble for suggest mode - we only care about the command output
-            }
-            StreamEvent::Backoff { attempt, delay_ms } => {
-                if let Some(ref slots) = callback_slots {
-                    crate::preview::backoff_shared_slot(slots, slot_idx, attempt, delay_ms);
-                }
-            }
-            StreamEvent::Retrying { attempt } => {
-                if let Some(ref slots) = callback_slots {
-                    crate::preview::retrying_shared_slot(slots, slot_idx, attempt);
-                }
-            }
-        }
-    });
+    let cb_extractor = extractor.clone();
+    let cb_slots = shared_slots.clone();
 
-    // Use spawn_blocking with streaming
     let response = tokio::task::spawn_blocking(move || {
-        backend.complete_streaming(&request, callback)
+        complete_with_correction(
+            &*backend,
+            &request,
+            2,
+            |attempt| {
+                if attempt.attempt > 0 {
+                    *cb_extractor.lock().unwrap() = CommandExtractor::new();
+                    if let Some(ref slots) = cb_slots {
+                        crate::preview::correcting_shared_slot(
+                            slots, slot_idx, attempt.attempt, attempt.max_retries,
+                        );
+                    }
+                }
+                let extractor = cb_extractor.clone();
+                let slots = cb_slots.clone();
+                Box::new(move |event| {
+                    match event {
+                        StreamEvent::TextDelta(text) => {
+                            if let Some(ref slots) = slots {
+                                let extracted = extractor.lock().unwrap().feed(&text);
+                                crate::preview::update_shared_slot(slots, slot_idx, &extracted);
+                            }
+                        }
+                        StreamEvent::Preamble(_) => {}
+                        StreamEvent::Backoff { attempt, delay_ms } => {
+                            if let Some(ref slots) = slots {
+                                crate::preview::backoff_shared_slot(slots, slot_idx, attempt, delay_ms);
+                            }
+                        }
+                        StreamEvent::Retrying { attempt } => {
+                            if let Some(ref slots) = slots {
+                                crate::preview::retrying_shared_slot(slots, slot_idx, attempt);
+                            }
+                        }
+                    }
+                    StreamAction::Continue
+                })
+            },
+            |resp| {
+                serde_json::from_str::<Suggestion>(&resp.content).map_err(|e| {
+                    if resp.is_truncated {
+                        "Response truncated (max_tokens too low). Increase --max-tokens or SHAI_MAX_TOKENS.".to_string()
+                    } else {
+                        format!("Failed to parse JSON from model: {}\nReceived: {}", e, resp.content)
+                    }
+                })
+            },
+        )
     })
     .await
     .map_err(|e| anyhow!("Task join error: {}", e))?;
 
     match response {
-        Ok(resp) => {
-            let suggestion: Suggestion = serde_json::from_str(&resp.content).map_err(|e| {
-                if resp.is_truncated {
-                    anyhow!(
-                        "Response truncated (max_tokens too low). Increase --max-tokens or SHAI_MAX_TOKENS."
-                    )
-                } else {
-                    anyhow!("Failed to parse JSON from model: {}\nReceived: {}", e, resp.content)
-                }
-            })?;
-
-            // Mark slot as complete with the command (if TTY)
+        Ok(suggestion) => {
             if let Some(ref slots) = shared_slots {
                 crate::preview::complete_shared_slot(slots, slot_idx, suggestion.command.clone());
             }
             Ok(Some(suggestion))
         }
         Err(e) => {
-            // Mark slot as errored (if TTY)
             if let Some(ref slots) = shared_slots {
                 crate::preview::error_shared_slot(slots, slot_idx, e.to_string());
             }
-            Err(match e {
-                BackendError::ApiError(msg) => anyhow!("API error: {}", msg),
-                BackendError::RateLimited(msg) => anyhow!("Rate limited: {}", msg),
-                BackendError::NetworkError(msg) => anyhow!("Network error: {}", msg),
-                BackendError::ParseError(msg) => anyhow!("Parse error: {}", msg),
-                BackendError::RequestTooLarge(msg) => anyhow!("Request too large: {}", msg),
-                BackendError::Other(msg) => anyhow!("{}", msg),
-            })
+            Err(anyhow!("{}", e))
         }
     }
 }

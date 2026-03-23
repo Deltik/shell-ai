@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.6.1 (UNRELEASED)
 
+### Added
+
+- **Automatic correction for APIs that don't support structured outputs** ([#1](https://github.com/Deltik/shell-ai/issues/1))
+
+  Some OpenAI-compatible or Anthropic-compatible API providers (e.g., at the time of writing, [cloud models via Ollama](https://github.com/ollama/ollama/issues/12362), GitHub Copilot proxies) silently ignore the `response_format` JSON schema constraint, causing the model to return Markdown-wrapped JSON or non-conforming output. Shell-AI now detects invalid responses and automatically retries with correction feedback, building a multi-turn conversation that steers the model toward valid output.
+
+  Invalid response prefixes such as Markdown fences are detected on the first streaming token, aborting the request early to avoid wasting time on a response that can never conform.
+
+  Up to 2 correction attempts are made before giving up. Note that using APIs without structured output support will add latency and token costs (if applicable) from the extra round-trips.
+
 ### Fixed
 
 - **Arrow keys moved two options at a time on Windows** ([#2](https://github.com/Deltik/shell-ai/issues/2))

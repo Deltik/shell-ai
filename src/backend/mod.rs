@@ -7,6 +7,7 @@
 
 mod anthropic;
 mod claude_code;
+pub mod correction;
 mod openai;
 
 pub use anthropic::AnthropicBackend;
@@ -14,17 +15,132 @@ pub use claude_code::ClaudeCodeBackend;
 pub use openai::OpenAiBackend;
 
 use anyhow::Result;
+use crate::http::SseStream;
+use serde_json::json;
+use std::thread;
+use std::time::Duration;
+
+/// Maximum number of retry attempts for rate limiting (HTTP 429).
+const MAX_RETRIES: u32 = 5;
+
+/// Base delay for exponential backoff in milliseconds.
+const BASE_DELAY_MS: u64 = 1000;
+
+/// Role for a message in conversation history.
+#[derive(Debug, Clone)]
+pub enum MessageRole {
+    User,
+    Assistant,
+}
+
+impl MessageRole {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MessageRole::User => "user",
+            MessageRole::Assistant => "assistant",
+        }
+    }
+}
+
+/// A prior message in a multi-turn conversation.
+#[derive(Debug, Clone)]
+pub struct HistoryMessage {
+    pub role: MessageRole,
+    pub content: String,
+}
+
+/// Build the JSON messages array from history + final user message.
+/// Used by HTTP-based backends (OpenAI, Anthropic).
+fn build_history_messages(request: &CompletionRequest) -> Vec<serde_json::Value> {
+    let mut messages: Vec<serde_json::Value> = Vec::new();
+    for msg in &request.message_history {
+        messages.push(json!({"role": msg.role.as_str(), "content": &msg.content}));
+    }
+    messages.push(json!({"role": "user", "content": &request.user_message}));
+    messages
+}
+
+/// Outcome of HTTP status handling.
+enum HttpStatus {
+    /// Stream is ready for SSE processing.
+    Ready,
+    /// Rate limited; already slept and notified callback. Caller should retry.
+    Retry,
+}
+
+/// Handle common HTTP error statuses (429 retry, 413, generic errors).
+///
+/// Returns `Ok(HttpStatus::Ready)` if the stream should be processed,
+/// `Ok(HttpStatus::Retry)` if the caller should retry the request (stream is consumed),
+/// or `Err(BackendError)` for terminal errors.
+fn handle_http_status(
+    stream: SseStream,
+    attempt: u32,
+    callback: &StreamCallback,
+) -> Result<(HttpStatus, SseStream), BackendError> {
+    let status = stream.status();
+
+    if status == 429 {
+        if attempt < MAX_RETRIES {
+            let delay_ms = stream
+                .retry_after_secs()
+                .map(|secs| secs * 1000)
+                .unwrap_or_else(|| BASE_DELAY_MS * (1 << attempt));
+            callback(StreamEvent::Backoff { attempt: attempt + 1, delay_ms });
+            thread::sleep(Duration::from_millis(delay_ms));
+            callback(StreamEvent::Retrying { attempt: attempt + 1 });
+            return Ok((HttpStatus::Retry, stream));
+        }
+        let body = stream.read_body().unwrap_or_default().trim().to_string();
+        return Err(BackendError::RateLimited(
+            if body.is_empty() { "Too many requests".to_string() } else { body }
+        ));
+    }
+
+    if status == 413 {
+        let body = stream.read_body().unwrap_or_default().trim().to_string();
+        return Err(BackendError::RequestTooLarge(
+            if body.is_empty() { "context length exceeded".to_string() } else { body }
+        ));
+    }
+
+    if !(200..300).contains(&status) {
+        let body = stream.read_body().unwrap_or_default().trim().to_string();
+        return Err(BackendError::ApiError(format!(
+            "HTTP {}: {}",
+            status,
+            if body.is_empty() { "Unknown error".to_string() } else { body }
+        )));
+    }
+
+    Ok((HttpStatus::Ready, stream))
+}
+
+/// Append a text chunk to the accumulator and emit it through the callback.
+/// Returns the callback's `StreamAction` (`Abort` to stop the stream early).
+/// No-ops for empty text.
+fn emit_text_delta(text: &str, accumulator: &mut String, callback: &StreamCallback) -> StreamAction {
+    if text.is_empty() {
+        return StreamAction::Continue;
+    }
+    accumulator.push_str(text);
+    callback(StreamEvent::TextDelta(text.to_string()))
+}
 
 /// A completion request to be sent to an AI backend.
 #[derive(Debug, Clone)]
 pub struct CompletionRequest {
     /// System messages (instructions, documentation, etc.)
-    /// For OpenAI-compatible: sent as multiple system role messages
-    /// For Anthropic: concatenated or sent as system field
+    /// For OpenAI-compatible: sent as a single merged system role message
+    /// For Anthropic: concatenated into the system field
     /// For Claude Code: combined into the prompt
     pub system_messages: Vec<String>,
 
-    /// The user's message/prompt
+    /// Prior conversation turns (for correction retries).
+    /// Inserted between system messages and `user_message`.
+    pub message_history: Vec<HistoryMessage>,
+
+    /// The user's message/prompt (always the final user turn)
     pub user_message: String,
 
     /// Optional JSON schema for structured output
@@ -101,8 +217,18 @@ pub enum StreamEvent {
     Retrying { attempt: u32 },
 }
 
+/// Action returned by a streaming callback to control the stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamAction {
+    /// Continue reading the stream.
+    Continue,
+    /// Abort the stream early (e.g., response prefix is already invalid).
+    Abort,
+}
+
 /// Callback type for streaming completion events.
-pub type StreamCallback = Box<dyn Fn(StreamEvent) + Send + 'static>;
+/// Returns `StreamAction` to control whether the stream should continue.
+pub type StreamCallback = Box<dyn Fn(StreamEvent) -> StreamAction + Send + 'static>;
 
 /// Trait for AI completion backends.
 ///
@@ -123,10 +249,4 @@ pub trait Backend: Send + Sync {
         request: &CompletionRequest,
         callback: StreamCallback,
     ) -> Result<CompletionResponse, BackendError>;
-
-    /// Convenience method for non-streaming use cases.
-    /// Collects all tokens and returns the final response.
-    fn complete(&self, request: &CompletionRequest) -> Result<CompletionResponse, BackendError> {
-        self.complete_streaming(request, Box::new(|_| {}))
-    }
 }

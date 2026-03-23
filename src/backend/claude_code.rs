@@ -1,6 +1,6 @@
 //! Claude Code CLI backend (subprocess-based).
 
-use super::{Backend, BackendError, CompletionRequest, CompletionResponse, StreamCallback, StreamEvent};
+use super::{Backend, BackendError, CompletionRequest, CompletionResponse, MessageRole, StreamAction, StreamCallback, StreamEvent};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 
@@ -23,6 +23,16 @@ impl ClaudeCodeBackend {
             prompt.push_str(sys_msg);
             prompt.push_str("\n\n");
         }
+
+        // Prior conversation turns (for correction retries)
+        for msg in &request.message_history {
+            let label = match msg.role {
+                MessageRole::User => "User",
+                MessageRole::Assistant => "Assistant",
+            };
+            prompt.push_str(&format!("{}: {}\n\n", label, msg.content));
+        }
+
         prompt.push_str(&request.user_message);
         prompt
     }
@@ -75,24 +85,28 @@ impl ClaudeCodeBackend {
         Ok(None)
     }
 
-    fn handle_stream_event(entry: &serde_json::Value, callback: &StreamCallback) {
+    fn handle_stream_event(entry: &serde_json::Value, callback: &StreamCallback) -> StreamAction {
         let event = &entry["event"];
         if event["type"].as_str() != Some("content_block_delta") {
-            return;
+            return StreamAction::Continue;
         }
         let delta = &event["delta"];
         match delta["type"].as_str() {
             Some("text_delta") => {
                 if let Some(text) = delta["text"].as_str() {
-                    callback(StreamEvent::Preamble(text.to_string()));
+                    callback(StreamEvent::Preamble(text.to_string()))
+                } else {
+                    StreamAction::Continue
                 }
             }
             Some("input_json_delta") => {
                 if let Some(json) = delta["partial_json"].as_str() {
-                    callback(StreamEvent::TextDelta(json.to_string()));
+                    callback(StreamEvent::TextDelta(json.to_string()))
+                } else {
+                    StreamAction::Continue
                 }
             }
-            _ => {}
+            _ => StreamAction::Continue,
         }
     }
 
@@ -164,7 +178,9 @@ impl ClaudeCodeBackend {
         match entry["type"].as_str().unwrap_or("") {
             "result" => Self::handle_result(&entry),
             "stream_event" => {
-                Self::handle_stream_event(&entry, callback);
+                if Self::handle_stream_event(&entry, callback) == StreamAction::Abort {
+                    return Ok(Some(String::new()));
+                }
                 Ok(None)
             }
             "assistant" => Self::handle_assistant(&entry, child, error_count, last_error),

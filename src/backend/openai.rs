@@ -8,17 +8,12 @@
 //! - Ollama
 //! - Any OpenAI-compatible API
 
-use super::{Backend, BackendError, CompletionRequest, CompletionResponse, StreamCallback, StreamEvent};
+use super::{
+    Backend, BackendError, CompletionRequest, CompletionResponse, HttpStatus, StreamAction,
+    StreamCallback, build_history_messages, emit_text_delta, handle_http_status, MAX_RETRIES,
+};
 use crate::http;
 use serde_json::json;
-use std::thread;
-use std::time::Duration;
-
-/// Maximum number of retry attempts for rate limiting (HTTP 429).
-const MAX_RETRIES: u32 = 5;
-
-/// Base delay for exponential backoff in milliseconds.
-const BASE_DELAY_MS: u64 = 1000;
 
 /// Backend for OpenAI-compatible HTTP APIs.
 #[derive(Clone)]
@@ -72,7 +67,9 @@ impl OpenAiBackend {
         for sys_msg in &request.system_messages {
             messages.push(json!({"role": "system", "content": sys_msg}));
         }
-        messages.push(json!({"role": "user", "content": &request.user_message}));
+
+        // History + final user message
+        messages.extend(build_history_messages(request));
 
         let mut payload = json!({
             "model": &self.model,
@@ -112,47 +109,13 @@ impl Backend for OpenAiBackend {
 
         // Retry loop for rate limiting
         for attempt in 0..=MAX_RETRIES {
-            let mut stream = http::post_json_streaming(&self.url, bearer_token, &extra_headers, &payload)
+            let stream = http::post_json_streaming(&self.url, bearer_token, &extra_headers, &payload)
                 .map_err(|e| BackendError::NetworkError(e.to_string()))?;
 
-            let status = stream.status();
-
-            // Handle HTTP 429 (rate limiting) with Retry-After header or exponential backoff
-            if status == 429 {
-                if attempt < MAX_RETRIES {
-                    // Use Retry-After header if provided, otherwise exponential backoff
-                    let delay_ms = stream
-                        .retry_after_secs()
-                        .map(|secs| secs * 1000)
-                        .unwrap_or_else(|| BASE_DELAY_MS * (1 << attempt));
-                    callback(StreamEvent::Backoff { attempt: attempt + 1, delay_ms });
-                    thread::sleep(Duration::from_millis(delay_ms));
-                    callback(StreamEvent::Retrying { attempt: attempt + 1 });
-                    continue;
-                } else {
-                    let body = stream.read_body().unwrap_or_default().trim().to_string();
-                    return Err(BackendError::RateLimited(
-                        if body.is_empty() { "Too many requests".to_string() } else { body }
-                    ));
-                }
-            }
-
-            // Handle HTTP errors
-            if status == 413 {
-                let body = stream.read_body().unwrap_or_default().trim().to_string();
-                return Err(BackendError::RequestTooLarge(
-                    if body.is_empty() { "context length exceeded".to_string() } else { body }
-                ));
-            }
-
-            if !(200..300).contains(&status) {
-                let body = stream.read_body().unwrap_or_default().trim().to_string();
-                return Err(BackendError::ApiError(format!(
-                    "HTTP {}: {}",
-                    status,
-                    if body.is_empty() { "Unknown error".to_string() } else { body }
-                )));
-            }
+            let mut stream = match handle_http_status(stream, attempt, &callback)? {
+                (HttpStatus::Retry, _) => continue,
+                (HttpStatus::Ready, s) => s,
+            };
 
             // Process SSE stream
             let mut full_content = String::new();
@@ -191,9 +154,8 @@ impl Backend for OpenAiBackend {
                             .and_then(|d| d.get("content"))
                             .and_then(|c| c.as_str())
                         {
-                            if !content.is_empty() {
-                                full_content.push_str(content);
-                                callback(StreamEvent::TextDelta(content.to_string()));
+                            if emit_text_delta(content, &mut full_content, &callback) == StreamAction::Abort {
+                                return Ok(CompletionResponse { content: full_content, is_truncated: false });
                             }
                         }
                     }

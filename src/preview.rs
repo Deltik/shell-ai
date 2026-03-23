@@ -670,19 +670,21 @@ pub enum SlotState {
     Waiting { attempt: u32, delay_ms: u64 },
     /// Retrying after backoff completed.
     Retrying { attempt: u32 },
+    /// Correcting a response that failed to parse.
+    Correcting { attempt: u32, max_retries: u32 },
     Complete { chars: usize, command: String },
     Error(String),
 }
 
 impl SlotState {
     pub fn is_pending_or_streaming(&self) -> bool {
-        matches!(self, SlotState::Pending | SlotState::Streaming { .. } | SlotState::Waiting { .. } | SlotState::Retrying { .. })
+        matches!(self, SlotState::Pending | SlotState::Streaming { .. } | SlotState::Waiting { .. } | SlotState::Retrying { .. } | SlotState::Correcting { .. })
     }
 
     pub fn char_count(&self) -> usize {
         match self {
-            SlotState::Streaming { chars, .. } => *chars,
-            SlotState::Complete { chars, .. } => *chars,
+            SlotState::Streaming { chars, .. }
+            | SlotState::Complete { chars, .. } => *chars,
             _ => 0,
         }
     }
@@ -699,6 +701,9 @@ fn slot_prefix(idx: usize, slot: &SlotState, spinner_idx: usize) -> String {
             format!("{}{} (backoff #{}, {:.1}s)", label, spinner, attempt, *delay_ms as f64 / 1000.0)
         }
         SlotState::Retrying { attempt } => format!("{}{} (retry #{})", label, spinner, attempt),
+        SlotState::Correcting { attempt, max_retries } => {
+            format!("{}{} (correcting {}/{})", label, spinner, attempt, max_retries)
+        }
         SlotState::Streaming { chars, .. } => format!("{}{} ({} chars) ", label, spinner, chars),
         SlotState::Complete { chars, .. } => format!("{}✓ ({} chars) ", label, chars),
         SlotState::Error(_) => format!("{}✗ ", label),
@@ -929,6 +934,15 @@ fn write_slot_to_buffer(
             buffer.write_str(&format!("(retry #{})", attempt));
             buffer.reset_style();
         }
+        SlotState::Correcting { attempt, max_retries } => {
+            buffer.set_style(Style::fg(Color::Cyan));
+            buffer.write_char(spinner);
+            buffer.reset_style();
+            buffer.write_char(' ');
+            buffer.set_style(Style::fg(Color::Yellow));
+            buffer.write_str(&format!("(correcting {}/{})", attempt, max_retries));
+            buffer.reset_style();
+        }
         SlotState::Streaming { chars, content } => {
             buffer.set_style(Style::fg(Color::Cyan));
             buffer.write_char(spinner);
@@ -1019,8 +1033,10 @@ pub fn update_shared_slot(slots: &SharedSlots, idx: usize, delta: &str) {
                     *chars += delta.chars().count();
                     content.push_str(delta);
                 }
-                SlotState::Pending | SlotState::Waiting { .. } | SlotState::Retrying { .. } => {
-                    // Transition from Pending, Waiting, or Retrying to Streaming
+                SlotState::Pending
+                | SlotState::Waiting { .. }
+                | SlotState::Correcting { .. }
+                | SlotState::Retrying { .. } => {
                     *slot = SlotState::Streaming {
                         chars: delta.chars().count(),
                         content: delta.to_string(),
@@ -1061,6 +1077,15 @@ pub fn backoff_shared_slot(slots: &SharedSlots, idx: usize, attempt: u32, delay_
     if let Ok(mut slots) = slots.lock() {
         if let Some(slot) = slots.get_mut(idx) {
             *slot = SlotState::Waiting { attempt, delay_ms };
+        }
+    }
+}
+
+/// Mark a slot as correcting a failed response (thread-safe).
+pub fn correcting_shared_slot(slots: &SharedSlots, idx: usize, attempt: u32, max_retries: u32) {
+    if let Ok(mut slots) = slots.lock() {
+        if let Some(slot) = slots.get_mut(idx) {
+            *slot = SlotState::Correcting { attempt, max_retries };
         }
     }
 }
@@ -1890,7 +1915,7 @@ mod tests {
     fn test_line_count_matches_rendering() {
         // Verify that the line count computed by determine_display_mode's logic
         // matches the actual rows consumed by write_slot_to_buffer.
-        let slots = vec![
+        let slots = [
             SlotState::Complete { chars: 10, command: "short".into() },
             SlotState::Streaming { chars: 5, content: "x".repeat(200) },
             SlotState::Error("something went wrong with a long error message".into()),
