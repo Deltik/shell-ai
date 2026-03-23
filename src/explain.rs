@@ -235,6 +235,7 @@ struct ExplanationNode {
     prefix: Option<String>,
     #[serde(default)]
     suffix: Option<String>,
+    #[serde(default)]
     children: Vec<ExplanationNode>,
 }
 
