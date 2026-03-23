@@ -147,10 +147,6 @@ struct ConfigInitArgs {
 }
 
 #[derive(Parser, Debug)]
-#[command(after_long_help = "\
-Examples:\n  \
-  shell-ai suggest -- 'list files larger than 100MB'\n  \
-  shell-ai suggest -- find and kill process on port 8080")]
 struct SuggestArgs {
     /// Enable context mode: sends previous command output to the AI for contextual follow-up suggestions. Note: output is sent to your AI provider
     #[arg(long = "ctx")]
@@ -165,11 +161,6 @@ struct SuggestArgs {
 }
 
 #[derive(Parser, Debug)]
-#[command(after_long_help = "\
-Examples:\n  \
-  shell-ai explain -- tar -xzf archive.tar.gz\n  \
-  shell-ai explain -- 'find . -name \"*.log\" -mtime +7 -delete'\n  \
-  history | tail -1 | shell-ai explain")]
 struct ExplainArgs {
     /// Command to explain. If omitted and stdin is piped, read from stdin
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -181,6 +172,7 @@ struct ExplainArgs {
 
 /// Apply runtime help text to subcommand trees.
 fn augment_subcommand_help(cmd: clap::Command) -> clap::Command {
+    let bin = bin_name();
     let toml_path = config::toml_config_path()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "<unknown>".to_string());
@@ -198,37 +190,65 @@ fn augment_subcommand_help(cmd: clap::Command) -> clap::Command {
          and takes precedence over the TOML file."
     );
 
-    cmd.mut_subcommand("config", |config_cmd| {
+    cmd.mut_subcommand("suggest", |cmd| {
+        cmd.after_long_help(format!(
+            "Examples:\n  \
+             {bin} suggest -- 'list files larger than 100MB'\n  \
+             {bin} suggest -- find and kill process on port 8080"
+        ))
+    })
+    .mut_subcommand("explain", |cmd| {
+        cmd.after_long_help(format!(
+            "Examples:\n  \
+             {bin} explain -- tar -xzf archive.tar.gz\n  \
+             {bin} explain -- 'find . -name \"*.log\" -mtime +7 -delete'\n  \
+             history | tail -1 | {bin} explain"
+        ))
+    })
+    .mut_subcommand("config", |config_cmd| {
         config_cmd
             .long_about(config_long_about)
-            .after_long_help(
+            .after_long_help(format!(
                 "Examples:\n  \
-                 shell-ai config\n  \
-                 shell-ai config init\n  \
-                 shell-ai config init --stdout\n  \
-                 shell-ai config schema",
-            )
+                 {bin} config\n  \
+                 {bin} config init\n  \
+                 {bin} config init --stdout\n  \
+                 {bin} config schema"
+            ))
             .mut_subcommand("init", |init_cmd| init_cmd.long_about(init_long_about))
     })
     .mut_subcommand("integration", |int_cmd| {
         int_cmd
-            .after_long_help(
+            .after_long_help(format!(
                 "Examples:\n  \
-                 shell-ai integration generate bash\n  \
-                 shell-ai integration generate zsh --preset full\n  \
-                 shell-ai integration list\n  \
-                 shell-ai integration update",
-            )
+                 {bin} integration generate bash\n  \
+                 {bin} integration generate zsh --preset full\n  \
+                 {bin} integration list\n  \
+                 {bin} integration update"
+            ))
             .mut_subcommand("generate", |gen_cmd| {
-                gen_cmd.after_long_help(
+                gen_cmd.after_long_help(format!(
                     "Examples:\n  \
-                     shell-ai integration generate bash\n  \
-                     shell-ai integration generate zsh --preset full\n  \
-                     shell-ai integration generate fish --add keybinding\n  \
-                     shell-ai integration generate bash --remove aliases --stdout",
-                )
+                     {bin} integration generate bash\n  \
+                     {bin} integration generate zsh --preset full\n  \
+                     {bin} integration generate fish --add keybinding\n  \
+                     {bin} integration generate bash --remove aliases --stdout"
+                ))
             })
     })
+}
+
+/// Get the current executable's file name as invoked (e.g. "shell-ai" or a custom name).
+/// Uses argv[0] so that symlinks/copies preserve the user's chosen name.
+pub fn bin_name() -> String {
+    std::env::args()
+        .next()
+        .and_then(|arg| {
+            Path::new(&arg)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "shell-ai".to_string())
 }
 
 /// Check if an executable named `shai` exists in PATH.
@@ -309,11 +329,12 @@ async fn main() -> Result<()> {
     } else {
         let mut cmd = Cli::command();
         if !shai_in_path() {
-            cmd = cmd.after_long_help("\
+            let bin = bin_name();
+            cmd = cmd.after_long_help(format!("\
 Tip: Create a symlink or copy named 'shai' for a shorthand that goes \
 straight to suggest mode:\n\n  \
-  ln -s shell-ai shai\n  \
-  shai -- 'list files larger than 100MB'");
+  ln -s {bin} shai\n  \
+  shai -- 'list files larger than 100MB'"));
         }
         cmd = augment_subcommand_help(cmd);
         let matches = cmd.get_matches();
@@ -360,7 +381,7 @@ straight to suggest mode:\n\n  \
             }
         }
         Command::Integration(args) => {
-            integration::run(args, config.output_format.value)?;
+            integration::run(&bin_name(), args, config.output_format.value)?;
         }
     }
 

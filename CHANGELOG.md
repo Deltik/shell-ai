@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Breaking:** Configuration overrides must now be placed _after_ the subcommand, not before it. For example, `shell-ai --provider openai suggest` must be written as `shell-ai suggest --provider openai`. The `shai` shorthand is unaffected.
 
+- **Binary name is no longer hard-coded**
+
+  Help text, usage examples, integration scripts (aliases, keybindings, completions), error messages, and generated config headers now use the actual executable name at runtime. Renaming, copying, or symlinking the binary makes all output reflect that name. The only exception is the `shai` shorthand, which always activates suggest mode regardless of the binary name for backwards compatibility with [ricklamers/shell-ai](https://pypi.org/project/shell-ai/).
+
 ### Fixed
 
 - **Legacy JSON config with environment variable keys now works**

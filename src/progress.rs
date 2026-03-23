@@ -1,4 +1,4 @@
-//! Progress indicator for shell-ai using indicatif.
+//! Progress indicator
 //!
 //! Shows a spinner with elapsed time in deciseconds during slow operations.
 //! Only displays when stderr is a terminal.
