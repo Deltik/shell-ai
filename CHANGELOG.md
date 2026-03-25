@@ -9,6 +9,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.6.2 (UNRELEASED)
 
+### Added
+
+- **Custom curl binary for HTTP requests (`curl_cmd` / `SHAI_CURL`)**
+
+  Shell-AI can use an external curl-compatible binary instead of its built-in HTTP client. This enables [curl-impersonate](https://github.com/lexiforest/curl-impersonate) for bypassing TLS fingerprint-based bot detection (Cloudflare), custom TLS configurations, client certificate authentication, and other transport-level needs that the built-in client doesn't support.
+
+  The command is parsed using POSIX shell quoting rules, so extra arguments work naturally:
+
+  ```bash
+  export SHAI_CURL='curl-impersonate --proxy socks5://localhost:1080'
+  ```
+
+  Or set persistently in `config.toml`:
+
+  ```toml
+  curl_cmd = "curl-impersonate"
+  ```
+
+- **Automatic runtime detection of libcurl-impersonate**
+
+  If `libcurl-impersonate.so` is installed on the system (or loaded via `LD_PRELOAD`), Shell-AI detects it automatically and uses it for HTTP requests. No configuration needed; the detection checks for the `curl_easy_impersonate` symbol to distinguish it from regular libcurl.
+
+  Example:
+
+  ```shell
+  deltik@box53 [~]$ shell-ai suggest -- 'get boot time in UTC'
+  Error: No suggestions could be generated.
+  Reason: API error: HTTP 403: {"error":{"message":"Access denied. Please check your network settings."}}
+  ```
+  
+  ```shell
+  deltik@box53 [~]$ LD_PRELOAD=/tmp/curl-impersonate/build/curl-8_15_0/lib/.  libs/libcurl-impersonate.so.4.8.0 CURL_IMPERSONATE=firefox147 shell-ai suggest -- 'get boot time in UTC'
+  Select a command:
+    [1] date -u -d @$(($(date +%s) - $(awk '{print int($1)}' /proc/uptime)))
+     2  date -u -d "$(who -b | awk '{print $3\" \" $4}')" +"%Y-%m-%d   %H:%M:%S %Z"
+     3  date -u -d @$(($(date +%s) - $(awk '{print int($1)}' /proc/uptime)))   +"%Y-%m-%d %H:%M:%S UTC"
+     g  Generate new suggestions
+   n  Enter a new command
+   q  Quit
+  
+  ↑↓/jk navigate • key/Enter select • Esc quit
+  ```
+
+- **Network error retry with exponential backoff**
+
+  Transient network errors (connection refused, DNS failures, TLS errors) are now retried with exponential backoff, matching the existing retry behavior for HTTP 429 rate limiting. Configuration errors (like a missing `curl_cmd` binary) fail immediately without retry.
+
 ### Changed
 
 - **Overhauled CLI help pages for standalone usability**

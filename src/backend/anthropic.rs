@@ -5,9 +5,9 @@
 
 use super::{
     Backend, BackendError, CompletionRequest, CompletionResponse, HttpStatus, StreamAction,
-    StreamCallback, build_history_messages, emit_text_delta, handle_http_status, MAX_RETRIES,
+    StreamCallback, build_history_messages, emit_text_delta, handle_http_status,
+    post_json_streaming_retryable, MAX_RETRIES,
 };
-use crate::http;
 use serde_json::json;
 
 /// Anthropic API version header value
@@ -84,10 +84,12 @@ impl Backend for AnthropicBackend {
             extra_headers.push(("x-api-key", key.as_str()));
         }
 
-        // Retry loop for rate limiting
+        // Retry loop for rate limiting and transient network errors
         for attempt in 0..=MAX_RETRIES {
-            let stream = http::post_json_streaming(&url, None, &extra_headers, &payload)
-                .map_err(|e| BackendError::NetworkError(e.to_string()))?;
+            let stream = match post_json_streaming_retryable(&url, None, &extra_headers, &payload, attempt, &callback)? {
+                Some(s) => s,
+                None => continue,
+            };
 
             // Anthropic-specific: detect context length errors in 400 responses
             if stream.status() == 400 {

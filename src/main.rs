@@ -344,6 +344,7 @@ straight to suggest mode:\n\n  \
     let cli_overrides = build_cli_overrides(&cli.global, extract_config_overrides(&cli.command));
     let config = AppConfig::load_with_cli(cli_overrides);
     logger::set_debug(config.debug.value);
+    http::set_curl_cmd(config.curl_cmd.value.clone(), config::get_field_meta("curl_cmd"));
 
     match cli.command {
         Command::Suggest(args) => {

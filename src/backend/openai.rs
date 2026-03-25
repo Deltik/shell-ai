@@ -10,9 +10,9 @@
 
 use super::{
     Backend, BackendError, CompletionRequest, CompletionResponse, HttpStatus, StreamAction,
-    StreamCallback, build_history_messages, emit_text_delta, handle_http_status, MAX_RETRIES,
+    StreamCallback, build_history_messages, emit_text_delta, handle_http_status,
+    post_json_streaming_retryable, MAX_RETRIES,
 };
-use crate::http;
 use serde_json::json;
 
 /// Backend for OpenAI-compatible HTTP APIs.
@@ -109,10 +109,12 @@ impl Backend for OpenAiBackend {
         let bearer_token = self.api_key.as_deref();
         let extra_headers = self.extra_headers_ref();
 
-        // Retry loop for rate limiting
+        // Retry loop for rate limiting and transient network errors
         for attempt in 0..=MAX_RETRIES {
-            let stream = http::post_json_streaming(&self.url, bearer_token, &extra_headers, &payload)
-                .map_err(|e| BackendError::NetworkError(e.to_string()))?;
+            let stream = match post_json_streaming_retryable(&self.url, bearer_token, &extra_headers, &payload, attempt, &callback)? {
+                Some(s) => s,
+                None => continue,
+            };
 
             let mut stream = match handle_http_status(stream, attempt, &callback)? {
                 (HttpStatus::Retry, _) => continue,

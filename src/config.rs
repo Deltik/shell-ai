@@ -195,6 +195,7 @@ pub mod env {
     pub const SHAI_MAX_TOKENS: &str = "SHAI_MAX_TOKENS";
     pub const SHAI_DEBUG: &str = "SHAI_DEBUG";
     pub const SHAI_LOCALE: &str = "SHAI_LOCALE";
+    pub const SHAI_CURL: &str = "SHAI_CURL";
 
     // OpenAI provider
     pub const OPENAI_API_KEY: &str = "OPENAI_API_KEY";
@@ -343,6 +344,19 @@ impl FieldMeta {
     pub const fn allow_empty(mut self) -> Self {
         self.allow_empty = true;
         self
+    }
+
+    /// Return a human-readable hint for how to set this field.
+    pub fn setting_hint(&self) -> String {
+        let toml_hint = if self.section == Section::ProviderSpecific {
+            format!("{} under a [provider] section in the config file", self.name)
+        } else {
+            format!("{} in the config file", self.name)
+        };
+        match self.env_var {
+            Some(env) => format!("Set via {} env var or {}", env, toml_hint),
+            None => format!("Set {}", toml_hint),
+        }
     }
 
     /// Get the default value as a serde_json::Value.
@@ -518,7 +532,15 @@ pub const GLOBAL_SETTINGS_METADATA: &[FieldMeta] = &[
         .env(env::SHAI_LOCALE)
         .section(Section::Ui)
         .allow_empty(),
+    FieldMeta::new("curl_cmd", "curl-compatible command for HTTP requests (e.g., curl-impersonate)")
+        .env(env::SHAI_CURL)
+        .section(Section::Provider),
 ];
+
+/// Look up a global field's metadata by name.
+pub fn get_field_meta(name: &str) -> Option<&'static FieldMeta> {
+    GLOBAL_SETTINGS_METADATA.iter().find(|f| f.name == name)
+}
 
 /// Provider-specific metadata.
 pub const PROVIDER_METADATA: &[ProviderMeta] = &[
@@ -996,6 +1018,7 @@ pub struct TomlConfig {
     pub max_tokens: Option<u32>,
     pub debug: Option<DebugLevel>,
     pub locale: Option<String>,
+    pub curl_cmd: Option<String>,
 
     // Provider-specific sections
     pub openai: Option<ProviderCredentials>,
@@ -1034,6 +1057,9 @@ pub struct AppConfig {
 
     // Locale for AI responses
     pub locale: ConfigValue<Option<String>>,
+
+    // Custom curl binary for HTTP requests
+    pub curl_cmd: ConfigValue<Option<String>>,
 
     // Provider credentials (HashMap instead of individual fields)
     pub providers: HashMap<Provider, ProviderCredentials>,
@@ -1335,6 +1361,10 @@ impl AppConfig {
                 parsed.locale,
                 sources.get("locale").copied().unwrap_or(ConfigSource::Default),
             ),
+            curl_cmd: ConfigValue::new(
+                parsed.curl_cmd,
+                sources.get("curl_cmd").copied().unwrap_or(ConfigSource::Default),
+            ),
             providers,
             sources,
             toml_path,
@@ -1599,6 +1629,11 @@ impl AppConfig {
                     Some(loc) => loc.clone(),
                 };
                 Some((display, self.locale.source))
+            }
+            "curl_cmd" => {
+                let display = self.curl_cmd.value.clone()
+                    .unwrap_or_else(|| "(not set)".to_string());
+                Some((display, self.curl_cmd.source))
             }
             _ => None,
         }

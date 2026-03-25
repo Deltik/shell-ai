@@ -368,6 +368,86 @@ No API key or login configuration needed; Claude Code manages its own authentica
 
 </details>
 
+### Advanced
+
+#### Custom cURL Binary
+
+Shell-AI uses a built-in HTTP client ([ureq](https://crates.io/crates/ureq) with rustls) by default. For situations where you need more control over the HTTP transport, you can configure Shell-AI to use an external `curl`-compatible binary instead.
+
+##### Use Cases
+
+- **TLS fingerprint bypass:** Some API providers ([like Groq](https://web.archive.org/web/20260325030530/https://megalodon.jp/2026-0325-1204-25/https://community.groq.com:443/t/ip-address-range-blocked-by-cloudflare/728)) use Cloudflare bot protection that fingerprints TLS handshakes. The built-in client's TLS fingerprint can be detected and blocked. [curl-impersonate](https://github.com/lexiforest/curl-impersonate) mimics real browser TLS fingerprints to bypass this.
+- **Client certificates:** Authenticate to APIs that require mTLS.
+- **Custom TLS settings:** Use specific cipher suites, TLS versions, or CA bundles.
+- **Network debugging:** Route through a verbose proxy or log request details.
+- **Corporate proxies:** Use NTLM or Kerberos proxy authentication that the built-in client doesn't support.
+
+##### Configuration
+
+```bash
+# Environment variable
+export SHAI_CURL=curl-impersonate
+
+# Or in config.toml
+curl_cmd = "curl-impersonate"
+```
+
+The command is parsed using POSIX shell quoting rules, so extra arguments work naturally:
+
+```bash
+export SHAI_CURL='curl --cacert /path/to/custom-ca.pem'
+```
+
+The configured binary must accept standard curl flags (`-s`, `-S`, `-i`, `--no-buffer`, `-H`, `-d @-`, `--max-time`). Shell-AI passes the request body via stdin and reads the response (headers + body) from stdout.
+
+##### With [curl-impersonate](https://github.com/lexiforest/curl-impersonate)
+
+```bash
+# Install curl-impersonate (https://github.com/lexiforest/curl-impersonate)
+# Then configure Shell-AI to use it:
+export SHAI_CURL=curl-impersonate
+export CURL_IMPERSONATE=firefox147  # browser to impersonate (handled by curl-impersonate, not Shell-AI)
+```
+
+> [!TIP]
+> Shell-AI also auto-detects `libcurl-impersonate.so` at runtime (including via `LD_PRELOAD`) and uses it without any configuration. The `curl_cmd` setting is for when you want to use a specific binary or pass extra arguments.
+
+<details>
+<summary>curl-impersonate libcurl Example</summary>
+
+Before:
+
+```shell
+deltik@box53 [~]$ shell-ai suggest -- 'get boot time in UTC'
+Error: No suggestions could be generated.
+Reason: API error: HTTP 403: {"error":{"message":"Access denied. Please check your network settings."}}
+```
+
+After:
+
+```shell
+deltik@box53 [~]$ LD_PRELOAD=/tmp/curl-impersonate/build/curl-8_15_0/lib/.libs/libcurl-impersonate.so.4.8.0 CURL_IMPERSONATE=firefox147 shell-ai suggest -- 'get boot time in UTC'
+Select a command:
+  [1] date -u -d @$(($(date +%s) - $(awk '{print int($1)}' /proc/uptime)))
+   2  date -u -d "$(who -b | awk '{print $3\" \" $4}')" +"%Y-%m-%d %H:%M:%S %Z"
+   3  date -u -d @$(($(date +%s) - $(awk '{print int($1)}' /proc/uptime))) +"%Y-%m-%d %H:%M:%S UTC"
+   g  Generate new suggestions
+   n  Enter a new command
+   q  Quit
+
+↑↓/jk navigate • key/Enter select • Esc quit
+```
+
+</details>
+
+##### HTTP Backend Priority
+
+Shell-AI will try the following HTTP backends in order:
+
+1. `curl_cmd` / `SHAI_CURL`: Configured curl-compatible binary (subprocess)
+2. `libcurl-impersonate.so`: Auto-detected library (in-process, zero config)
+3. Built-in ureq: Default, always available
+
 ## Shell Integration
 
 Shell-AI works well standalone, but integrating it into your shell enables any or all of these streamlined workflows:

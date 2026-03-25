@@ -15,7 +15,7 @@ pub use claude_code::ClaudeCodeBackend;
 pub use openai::OpenAiBackend;
 
 use anyhow::Result;
-use crate::http::SseStream;
+use crate::http::{HttpError, SseStream};
 use serde_json::json;
 use std::thread;
 use std::time::Duration;
@@ -66,6 +66,39 @@ enum HttpStatus {
     Ready,
     /// Rate limited; already slept and notified callback. Caller should retry.
     Retry,
+}
+
+/// Attempt to connect with retryable network error handling.
+///
+/// Returns `Ok(Some(stream))` on success, `Ok(None)` if the caller should `continue`
+/// the retry loop (network error with backoff already applied), or `Err` on final failure.
+fn post_json_streaming_retryable(
+    url: &str,
+    bearer_token: Option<&str>,
+    extra_headers: &[(&str, &str)],
+    body: &serde_json::Value,
+    attempt: u32,
+    callback: &StreamCallback,
+) -> Result<Option<SseStream>, BackendError> {
+    match crate::http::post_json_streaming(url, bearer_token, extra_headers, body) {
+        Ok(stream) => Ok(Some(stream)),
+        Err(HttpError::Config(msg)) => {
+            // Configuration errors are permanent — don't retry
+            Err(BackendError::ConfigError(msg))
+        }
+        Err(HttpError::Network(msg)) => {
+            if attempt < MAX_RETRIES {
+                let delay_ms = BASE_DELAY_MS * (1 << attempt);
+                log::debug!("Network error (attempt {}): {}", attempt + 1, msg);
+                callback(StreamEvent::Backoff { attempt: attempt + 1, delay_ms });
+                thread::sleep(Duration::from_millis(delay_ms));
+                callback(StreamEvent::Retrying { attempt: attempt + 1 });
+                Ok(None)
+            } else {
+                Err(BackendError::NetworkError(msg))
+            }
+        }
+    }
 }
 
 /// Handle common HTTP error statuses (429 retry, 413, generic errors).
@@ -175,6 +208,9 @@ pub enum BackendError {
     /// Network or connection error
     NetworkError(String),
 
+    /// Configuration error (e.g., bad curl_cmd path)
+    ConfigError(String),
+
     /// Failed to parse the response
     ParseError(String),
 
@@ -189,6 +225,7 @@ impl std::fmt::Display for BackendError {
             BackendError::RateLimited(msg) => write!(f, "Rate limited: {}", msg),
             BackendError::ApiError(msg) => write!(f, "API error: {}", msg),
             BackendError::NetworkError(msg) => write!(f, "Network error: {}", msg),
+            BackendError::ConfigError(msg) => write!(f, "Configuration error: {}", msg),
             BackendError::ParseError(msg) => write!(f, "Parse error: {}", msg),
             BackendError::Other(e) => write!(f, "{}", e),
         }
