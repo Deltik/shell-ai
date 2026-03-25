@@ -40,11 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
   
   ```shell
-  deltik@box53 [~]$ LD_PRELOAD=/tmp/curl-impersonate/build/curl-8_15_0/lib/.  libs/libcurl-impersonate.so.4.8.0 CURL_IMPERSONATE=firefox147 shell-ai suggest -- 'get boot time in UTC'
+  deltik@box53 [~]$ LD_PRELOAD=/tmp/curl-impersonate/build/curl-8_15_0/lib/.libs/libcurl-impersonate.so.4.8.0 CURL_IMPERSONATE=firefox147 shell-ai suggest -- 'get boot time in UTC'
   Select a command:
     [1] date -u -d @$(($(date +%s) - $(awk '{print int($1)}' /proc/uptime)))
-     2  date -u -d "$(who -b | awk '{print $3\" \" $4}')" +"%Y-%m-%d   %H:%M:%S %Z"
-     3  date -u -d @$(($(date +%s) - $(awk '{print int($1)}' /proc/uptime)))   +"%Y-%m-%d %H:%M:%S UTC"
+     2  date -u -d "$(who -b | awk '{print $3\" \" $4}')" +"%Y-%m-%d %H:%M:%S %Z"
+     3  date -u -d @$(($(date +%s) - $(awk '{print int($1)}' /proc/uptime))) +"%Y-%m-%d %H:%M:%S UTC"
      g  Generate new suggestions
    n  Enter a new command
    q  Quit
