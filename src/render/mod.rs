@@ -17,6 +17,7 @@ mod region;
 mod terminal;
 
 pub use buffer::VirtualBuffer;
+pub use diff::diff_row_cells;
 pub use region::Region;
 pub use terminal::TerminalRenderer;
 

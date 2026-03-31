@@ -9,8 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.7.1 (UNRELEASED)
 
+### Added
+
+- **Pre-computed shimmer animation for shell keybindings**
+
+  The Ctrl+G keybinding animation is now rendered by a hidden `_shimmer` subcommand that pre-computes diff-encoded frames in Rust. Shell integration scripts `eval` the output and loop over the pre-built frames, bringing:
+
+  - **Diff-based rendering:** Only changed columns are updated each frame (via CHA cursor positioning), reducing terminal I/O significantly. This should be especially beneficial over SSH.
+  - **Synchronized output:** Frames are wrapped in DEC Private Mode 2026 (BSU/ESU) to prevent tearing.
+  - **Text truncation:** Long prompts are truncated to the terminal width with an animated bouncing-dot indicator (`·  `, `·· `, `···`, ` ··`, `  ·`), fixing the wrapping bug where each animation frame added new lines.
+  - **Unicode-aware layout:** Display widths for CJK and other wide characters are calculated correctly via the `unicode-width` crate.
+  - **Cursor hiding:** The cursor is hidden during animation to prevent flicker.
+
+- **Terminal resize handling during keybinding animation**
+
+  The animation adapts when the terminal is resized mid-flight. The detection mechanism varies by shell: Zsh and Fish trap SIGWINCH, Bash polls `stty size` (readline intercepts SIGWINCH in `bind -x` handlers), and PowerShell polls `[Console]::WindowWidth`. On resize, the old frame area is cleared and `_shimmer` is re-invoked with the new width.
+
+### Changed
+
+- **Shimmer flourish rework:** The shimmer highlight now uses a sine ease-in-out curve (enters slowly, accelerates through the middle, decelerates at exit), and its glow radius scales logarithmically with text length (wider sweep on long prompts, unchanged for short labels).
+- Animation timing is now decoupled from the render frame rate. Spinner rotation, shimmer speed, and ellipsis animation are defined as durations in milliseconds, so changing the refresh interval does not alter animation speeds.
+
 ### Fixed
 
+- **Preview interface refresh rate:** The `shell-ai suggest` and `shell-ai explain` render loops had hardcoded sleep durations (100 ms and 80 ms, respectively) that bottlenecked the preview well below the configured animation rate. Both now use the new shared `RENDER_INTERVAL_MS` constant, currently set to 16 ms to approach 60 frames per second.
 - Keybinding integration scripts (Ctrl+G) used the pre-v0.7.0 argument order (`--frontend=noninteractive` before the subcommand), which broke after the CLI restructuring. Run `shell-ai integration update` to regenerate your integration scripts.
 
 ## v0.7.0 (2026-03-25)

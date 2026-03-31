@@ -731,38 +731,38 @@ const BASH_KEYBINDING: &str = r##"
 _shai_transform() {
     if [[ -n "$READLINE_LINE" ]]; then
         local original="$READLINE_LINE"
-        local len=${#original}
         local tmpfile=$(mktemp)
         local had_monitor=0
         local pid
-        local spinner=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
         [[ $- == *m* ]] && had_monitor=1
 
         set +m
-        trap 'kill $pid 2>/dev/null; (( had_monitor )) && set -m; rm -f "$tmpfile"; printf "\r\033[K"; trap - INT TERM; return' INT TERM
+        trap 'kill $pid 2>/dev/null; (( had_monitor )) && set -m; rm -f "$tmpfile"; printf "%s" "$_shai_cleanup"; trap - INT TERM; return' INT TERM
 
         { {bin} suggest --frontend=noninteractive -- "$original" 2>/dev/null > "$tmpfile" & } 2>/dev/null
         pid=$!
 
-        local frame=0
-        local cycle=$(( len + 6 ))
+        local prev_cols
+        read -r _ prev_cols < <(stty size </dev/tty 2>/dev/null) || prev_cols=80
+        eval "$({bin} _shimmer --shell=bash --cols=$prev_cols -- "$original")"
+        printf '%s' "$_shai_init"
+        local idx=0
         while kill -0 $pid 2>/dev/null; do
-            local pos=$(( frame % cycle - 2 ))
-            local highlighted=""
-            for ((j=0; j<len; j++)); do
-                local dist=$(( j - pos ))
-                (( dist < 0 )) && dist=$(( -dist ))
-                if (( dist == 0 )); then
-                    highlighted+="\033[1;96m${original:j:1}"
-                elif (( dist <= 2 )); then
-                    highlighted+="\033[0;36m${original:j:1}"
-                else
-                    highlighted+="\033[2;36m${original:j:1}"
-                fi
-            done
-            printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' "${spinner[frame % ${#spinner[@]}]}" "$highlighted"
-            sleep 0.08
-            frame=$(( frame + 1 ))
+            sleep "$_shai_interval"
+            local cur_cols
+            read -r _ cur_cols < <(stty size </dev/tty 2>/dev/null) || cur_cols=$prev_cols
+            if (( cur_cols != prev_cols )); then
+                local extra=$(( (prev_cols + cur_cols - 1) / cur_cols - 1 ))
+                (( extra > 0 )) && printf '\033[%dA' "$extra"
+                printf '\r\033[J'
+                eval "$({bin} _shimmer --shell=bash --cols=$cur_cols -- "$original")"
+                printf '%s' "$_shai_init"
+                idx=0
+                prev_cols=$cur_cols
+            else
+                idx=$(( (idx + 1) % _shai_n ))
+                printf '%s' "${_shai_frames[$idx]}"
+            fi
         done
 
         trap - INT TERM
@@ -770,7 +770,7 @@ _shai_transform() {
         READLINE_LINE=$(cat "$tmpfile")
         READLINE_POINT=${#READLINE_LINE}
         rm -f "$tmpfile"
-        printf '\r\033[K'
+        printf '%s' "$_shai_cleanup"
     fi
 }
 bind -x '"\C-g": _shai_transform'
@@ -788,41 +788,41 @@ const ZSH_KEYBINDING: &str = r##"
 _shai_transform() {
     if [[ -n "$BUFFER" ]]; then
         local original="$BUFFER"
-        local len=${#original}
         local tmpfile=$(mktemp)
-        local spinner=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
         local pid
 
         setopt LOCAL_OPTIONS NO_NOTIFY NO_MONITOR LOCAL_TRAPS
-        trap 'kill $pid 2>/dev/null; rm -f "$tmpfile"; printf "\r\033[K"; zle reset-prompt; return' INT TERM
+        trap 'kill $pid 2>/dev/null; rm -f "$tmpfile"; printf "%s" "$_shai_cleanup"; zle reset-prompt; return' INT TERM
 
         ({bin} suggest --frontend=noninteractive -- "$original" 2>/dev/null > "$tmpfile") &!
         pid=$!
 
-        local frame=0
-        local cycle=$(( len + 6 ))
+        local prev_cols=${COLUMNS:-80}
+        local _shai_resized=0
+        eval "$({bin} _shimmer --shell=zsh --cols=$prev_cols -- "$original")"
+        printf '%s' "$_shai_init"
+        local idx=0
+        trap '_shai_resized=1' WINCH
         while kill -0 $pid 2>/dev/null; do
-            local pos=$(( frame % cycle - 2 ))
-            local highlighted=""
-            for ((j=1; j<=len; j++)); do
-                local dist=$(( j - 1 - pos ))
-                (( dist < 0 )) && dist=$(( -dist ))
-                if (( dist == 0 )); then
-                    highlighted+="\033[1;96m${original[j]}"
-                elif (( dist <= 2 )); then
-                    highlighted+="\033[0;36m${original[j]}"
-                else
-                    highlighted+="\033[2;36m${original[j]}"
-                fi
-            done
-            printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' "${spinner[frame % ${#spinner[@]} + 1]}" "$highlighted"
-            sleep 0.08
-            frame=$(( frame + 1 ))
+            if (( _shai_resized )); then
+                _shai_resized=0
+                local new_cols=${COLUMNS:-80}
+                local extra=$(( (prev_cols + new_cols - 1) / new_cols - 1 ))
+                (( extra > 0 )) && printf '\033[%dA' "$extra"
+                printf '\r\033[J'
+                eval "$({bin} _shimmer --shell=zsh --cols=$new_cols -- "$original")"
+                printf '%s' "$_shai_init"
+                idx=0
+                prev_cols=$new_cols
+            fi
+            sleep "$_shai_interval"
+            idx=$(( (idx + 1) % _shai_n ))
+            printf '%s' "${_shai_frames[$idx]}"
         done
 
         BUFFER=$(< "$tmpfile")
         rm -f "$tmpfile"
-        printf '\r\033[K'
+        printf '%s' "$_shai_cleanup"
         zle reset-prompt
         zle end-of-line
     fi
@@ -849,46 +849,50 @@ function _shai_transform
     set -g __shai_tmp (mktemp)
     set -g __shai_pid
     set -g __shai_cancelled 0
-    set -l spinner ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏
-    set -l len (string length "$cmd")
+    set -g __shai_resized 0
+    set -g __shai_prev_cols $COLUMNS
 
     function __shai_cancel --on-event fish_cancel --on-signal INT
         set -g __shai_cancelled 1
         kill $__shai_pid 2>/dev/null
     end
 
+    function __shai_on_winch --on-signal WINCH
+        set -g __shai_resized 1
+    end
+
     sh -c '{bin} suggest --frontend=noninteractive -- "$1" 2>/dev/null > "$2"' _ "$cmd" "$__shai_tmp" &
     set __shai_pid $last_pid
 
-    set -l frame 0
-    set -l cycle (math "$len + 6")
+    {bin} _shimmer --shell=fish --cols=$__shai_prev_cols -- "$cmd" | source
+    printf '%s' "$_shai_init"
+    set -l idx 1
     while kill -0 $__shai_pid 2>/dev/null; and test $__shai_cancelled -eq 0
-        set -l pos (math "$frame % $cycle - 2")
-        set -l highlighted ""
-        for j in (seq $len)
-            set -l dist (math "abs($j - 1 - $pos)")
-            if test $dist -eq 0
-                set highlighted "$highlighted"\e"[1;96m"(string sub -s $j -l 1 "$cmd")
-            else if test $dist -le 2
-                set highlighted "$highlighted"\e"[0;36m"(string sub -s $j -l 1 "$cmd")
-            else
-                set highlighted "$highlighted"\e"[2;36m"(string sub -s $j -l 1 "$cmd")
-            end
+        if test $__shai_resized -eq 1
+            set -g __shai_resized 0
+            set -l new_cols $COLUMNS
+            set -l extra (math "ceil($__shai_prev_cols / $new_cols) - 1")
+            test $extra -gt 0; and printf '\033[%dA' $extra
+            printf '\r\033[J'
+            {bin} _shimmer --shell=fish --cols=$new_cols -- "$cmd" | source
+            printf '%s' "$_shai_init"
+            set idx 1
+            set -g __shai_prev_cols $new_cols
         end
-        printf '\r\033[K\033[1;36m%s\033[0m %b\033[0m' $spinner[(math "$frame % 10 + 1")] "$highlighted"
-        sleep 0.08 &; wait $last_pid; or break
-        set frame (math "$frame + 1")
+        sleep $_shai_interval &; wait $last_pid; or break
+        set idx (math "($idx % $_shai_n) + 1")
+        printf '%s' "$_shai_frames[$idx]"
     end
 
-    functions -e __shai_cancel
-    printf '\r\033[K'
+    functions -e __shai_cancel __shai_on_winch
+    printf '%s' "$_shai_cleanup"
     if test $__shai_cancelled -eq 1
         commandline -r $__shai_cmd
     else
         commandline -r (cat $__shai_tmp)
     end
     rm -f $__shai_tmp
-    set -e __shai_pid __shai_tmp __shai_cmd __shai_cancelled
+    set -e __shai_pid __shai_tmp __shai_cmd __shai_cancelled __shai_resized __shai_prev_cols
     commandline -f repaint
     commandline -f end-of-line
 end
@@ -908,17 +912,17 @@ Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
     $line = $null
     [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$null)
     if ($line) {
-        $len = $line.Length
-        $spinner = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
         $cancelled = $false
+        $prevCols = [Console]::WindowWidth
 
         $job = Start-Job -ScriptBlock {
             param($l)
             {bin} suggest --frontend=noninteractive -- $l 2>$null
         } -ArgumentList $line
 
-        $frame = 0
-        $cycle = $len + 6
+        Invoke-Expression (({bin} _shimmer --shell=powershell --cols=$prevCols -- $line) -join "`n")
+        [Console]::Write($_shai_init)
+        $idx = 0
         while ($job.State -eq 'Running') {
             if ([Console]::KeyAvailable) {
                 $key = [Console]::ReadKey($true)
@@ -927,33 +931,30 @@ Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
                     break
                 }
             }
-            $pos = $frame % $cycle - 2
-            $highlighted = ""
-            for ($j = 0; $j -lt $len; $j++) {
-                $dist = [Math]::Abs($j - $pos)
-                if ($dist -eq 0) {
-                    $highlighted += "`e[1;96m$($line[$j])"
-                } elseif ($dist -le 2) {
-                    $highlighted += "`e[0;36m$($line[$j])"
-                } else {
-                    $highlighted += "`e[2;36m$($line[$j])"
-                }
+            $newCols = [Console]::WindowWidth
+            if ($newCols -ne $prevCols) {
+                $extra = [Math]::Ceiling($prevCols / $newCols) - 1
+                if ($extra -gt 0) { [Console]::Write("`e[$($extra)A") }
+                [Console]::Write("`r`e[J")
+                Invoke-Expression (({bin} _shimmer --shell=powershell --cols=$newCols -- $line) -join "`n")
+                [Console]::Write($_shai_init)
+                $idx = 0
+                $prevCols = $newCols
             }
-            $spin = $spinner[$frame % $spinner.Length]
-            [Console]::Write("`r`e[K`e[1;36m$spin`e[0m $highlighted`e[0m")
-            Start-Sleep -Milliseconds 80
-            $frame++
+            Start-Sleep -Milliseconds ([int]($_shai_interval * 1000))
+            $idx = ($idx + 1) % $_shai_n
+            [Console]::Write($_shai_frames[$idx])
         }
 
         if ($cancelled) {
             Stop-Job $job
             Remove-Job $job
-            [Console]::Write("`r`e[K")
+            [Console]::Write($_shai_cleanup)
             [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
         } else {
             $result = (Receive-Job $job) -join "`n"
             Remove-Job $job
-            [Console]::Write("`r`e[K")
+            [Console]::Write($_shai_cleanup)
             [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, $result)
             [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
         }

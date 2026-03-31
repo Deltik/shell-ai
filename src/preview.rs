@@ -10,6 +10,7 @@
 //! - Synchronized output (DEC 2026) prevents tearing
 //! - Row-level diffing skips unchanged rows and only repaints modified ones
 
+use crate::animation;
 use crate::config::PreviewMode;
 use crate::render::{Color, Region, Style, TerminalRenderer, VirtualBuffer};
 use is_terminal::IsTerminal;
@@ -17,18 +18,6 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
-
-/// Spinner characters for animation.
-const SPINNER_CHARS: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-/// Bouncing dots animation for truncation indicator.
-/// The animation cycles through these frames to indicate ongoing activity.
-const ELLIPSIS_FRAMES: &[&str] = &["·  ", "·· ", "···", " ··", "  ·"];
-
-/// Get an animated ellipsis based on frame index.
-pub fn animated_ellipsis(frame: usize) -> &'static str {
-    ELLIPSIS_FRAMES[frame % ELLIPSIS_FRAMES.len()]
-}
 
 /// Separator line character.
 const SEPARATOR_CHAR: char = '─';
@@ -53,43 +42,10 @@ pub enum ThinkingPhase {
     Done { secs: f64 },
 }
 
-/// Write text with waving color flourish in cyan.
-/// The wave travels linearly (no wrap-around), so the highlight fades in from
-/// the left, traverses the text, fades out to the right, then pauses briefly
-/// before the next cycle. `pos` can be negative (wave approaching from left).
-fn write_flourish(buffer: &mut VirtualBuffer, text: &str, pos: isize) {
-    let chars: Vec<char> = text.chars().collect();
-    for (j, &ch) in chars.iter().enumerate() {
-        let dist = (j as isize - pos).unsigned_abs();
-
-        let style = if dist == 0 {
-            // \033[1;96m — bold + bright cyan
-            Style {
-                bold: true,
-                fg: Some(Color::BrightCyan),
-                ..Default::default()
-            }
-        } else if dist <= 2 {
-            // \033[0;36m — normal cyan
-            Style::fg(Color::Cyan)
-        } else {
-            // \033[2;36m — dim cyan
-            Style {
-                dim: true,
-                fg: Some(Color::Cyan),
-                ..Default::default()
-            }
-        };
-        buffer.set_style(style);
-        buffer.write_char(ch);
-    }
-    buffer.reset_style();
-}
-
 /// Write "thinking" with a pulsing dim/bold effect.
-fn write_thinking_pulse(buffer: &mut VirtualBuffer, frame: usize) {
-    // 8-frame cycle: dim dim default default bold bold default default
-    let style = match frame % 8 {
+fn write_thinking_pulse(buffer: &mut VirtualBuffer, elapsed_ms: u64) {
+    // 8-step cycle: dim dim default default bold bold default default
+    let style = match animation::thinking_pulse_phase(elapsed_ms) {
         0 | 1 => Style::dim(),
         4 | 5 => Style {
             bold: true,
@@ -107,26 +63,20 @@ fn write_thinking_pulse(buffer: &mut VirtualBuffer, frame: usize) {
 /// `metadata_items` are `·`-separated entries inside parentheses.
 fn write_progress_header(
     buffer: &mut VirtualBuffer,
-    spinner_idx: usize,
+    elapsed_ms: u64,
     label: &str,
     metadata_items: &[String],
 ) {
     // Spinner (cyan)
-    let spinner = SPINNER_CHARS[spinner_idx % SPINNER_CHARS.len()];
     buffer.set_style(Style::fg(Color::Cyan));
-    buffer.write_char(spinner);
+    buffer.write_char(animation::spinner_char(elapsed_ms));
     buffer.reset_style();
     buffer.write_char(' ');
 
     // Label with waving flourish.
-    // Cycle = label_len + 6: 2 entry frames (wave fading in from left) +
-    // label_len traversal frames + 2 exit frames (tail fading off right) +
-    // 2 fully dark frames. Effective position is offset by -2 so the wave
-    // starts approaching from beyond the left edge.
     let label_len = label.chars().count();
-    let cycle_len = label_len + 6;
-    let wave_pos = (spinner_idx % cycle_len) as isize - 2;
-    write_flourish(buffer, label, wave_pos);
+    let wave_pos = animation::shimmer_pos(elapsed_ms, label_len);
+    animation::write_flourish(buffer, label, wave_pos);
 
     // Space + parenthesized metadata (dim)
     buffer.write_char(' ');
@@ -137,7 +87,7 @@ fn write_progress_header(
             buffer.write_str(" \u{00b7} ");
         }
         if item == "thinking" {
-            write_thinking_pulse(buffer, spinner_idx);
+            write_thinking_pulse(buffer, elapsed_ms);
         } else {
             buffer.write_str(item);
         }
@@ -279,7 +229,6 @@ pub struct ExplainPreviewConfig {
     pub term_width: usize,
     pub term_height: usize,
     pub elapsed_secs: f64,
-    pub spinner_idx: usize,
     /// Number of characters received so far.
     pub char_count: usize,
     /// Optional status message (e.g., "backoff #2, 4.0s")
@@ -334,7 +283,8 @@ fn render_explain_to_buffer(
         }
         ThinkingPhase::None => {}
     }
-    write_progress_header(&mut buffer, config.spinner_idx, "Explaining\u{2026}", &metadata);
+    let elapsed_ms = (config.elapsed_secs * 1000.0) as u64;
+    write_progress_header(&mut buffer, elapsed_ms, "Explaining\u{2026}", &metadata);
 
     regions.push(Region::new(0, 1));
 
@@ -370,7 +320,7 @@ fn render_explain_to_buffer(
             buffer.write_str(&truncated.content);
             if truncated.was_truncated() || all_content.contains('\n') {
                 buffer.set_style(Style::dim());
-                buffer.write_str(animated_ellipsis(config.spinner_idx));
+                buffer.write_str(animation::animated_ellipsis(elapsed_ms));
                 buffer.reset_style();
             }
             regions.push(Region::new(2, 3));
@@ -476,7 +426,7 @@ fn render_explain_to_buffer(
                 buffer.move_to(separator_row, 1);
                 buffer.write_char('┤');
                 buffer.move_to(separator_row, 2);
-                buffer.write_str(animated_ellipsis(config.spinner_idx));
+                buffer.write_str(animation::animated_ellipsis(elapsed_ms));
                 buffer.move_to(separator_row, 5);
                 buffer.write_char('├');
             }
@@ -523,7 +473,6 @@ pub struct StreamingPreview {
     status: Arc<Mutex<Option<String>>>,
     start_time: Instant,
     renderer: TerminalRenderer,
-    spinner_idx: usize,
     last_render: Instant,
     /// Maximum preview display mode from user settings.
     max_preview_mode: PreviewMode,
@@ -549,7 +498,6 @@ impl StreamingPreview {
             status: Arc::new(Mutex::new(None)),
             start_time: Instant::now(),
             renderer: TerminalRenderer::new(),
-            spinner_idx: 0,
             last_render: Instant::now(),
             max_preview_mode,
             is_thinking: Arc::new(Mutex::new(false)),
@@ -604,10 +552,10 @@ impl StreamingPreview {
     }
 
     /// Render the current preview state.
-    /// Rate-limited to ~12.5 renders/second (80ms).
+    /// Rate-limited to [`animation::RENDER_INTERVAL_MS`].
     pub fn render(&mut self) -> io::Result<()> {
         let now = Instant::now();
-        if now.duration_since(self.last_render).as_millis() < 80 {
+        if now.duration_since(self.last_render).as_millis() < animation::RENDER_INTERVAL_MS as u128 {
             return Ok(());
         }
         self.last_render = now;
@@ -637,13 +585,11 @@ impl StreamingPreview {
             term_width: width as usize,
             term_height: drawable_height as usize,
             elapsed_secs: self.start_time.elapsed().as_secs_f64(),
-            spinner_idx: self.spinner_idx,
             char_count: self.get_char_count(),
             status: self.get_status(),
             max_preview_mode: self.max_preview_mode,
             thinking,
         };
-        self.spinner_idx = self.spinner_idx.wrapping_add(1);
 
         let chunks = self.get_chunks();
         let (buffer, regions) = render_explain_to_buffer(&chunks, &config);
@@ -692,9 +638,9 @@ impl SlotState {
 
 /// Plain text prefix for a slot line (everything before variable-length content).
 /// Single source of truth for layout — used by both line counting and rendering.
-fn slot_prefix(idx: usize, slot: &SlotState, spinner_idx: usize) -> String {
+fn slot_prefix(idx: usize, slot: &SlotState, elapsed_ms: u64) -> String {
     let label = format!("[{}] ", idx + 1);
-    let spinner = SPINNER_CHARS[spinner_idx % SPINNER_CHARS.len()];
+    let spinner = animation::spinner_char(elapsed_ms);
     match slot {
         SlotState::Pending => format!("{}{} (pending)", label, spinner),
         SlotState::Waiting { attempt, delay_ms } => {
@@ -738,7 +684,6 @@ pub struct SuggestPreviewConfig {
     pub term_width: usize,
     pub term_height: usize,
     pub elapsed_secs: f64,
-    pub spinner_idx: usize,
     /// Maximum preview display mode from user settings.
     pub max_preview_mode: PreviewMode,
 }
@@ -766,7 +711,8 @@ pub fn determine_display_mode(slots: &[SlotState], config: &SuggestPreviewConfig
 
     // Calculate lines needed for Full mode
     let full_lines: usize = slots.iter().enumerate().map(|(i, slot)| {
-        let text = format!("{}{}", slot_prefix(i, slot, config.spinner_idx), slot_content(slot));
+        let elapsed_ms = (config.elapsed_secs * 1000.0) as u64;
+        let text = format!("{}{}", slot_prefix(i, slot, elapsed_ms), slot_content(slot));
         wrapped_line_count(&text, config.term_width)
     }).sum();
 
@@ -791,6 +737,7 @@ fn render_suggest_to_buffer(
     let height = config.term_height as u16;
     let mut buffer = VirtualBuffer::new(width, height);
     let mut regions = Vec::new();
+    let elapsed_ms = (config.elapsed_secs * 1000.0) as u64;
 
     let display_mode = determine_display_mode(slots, config);
 
@@ -807,7 +754,7 @@ fn render_suggest_to_buffer(
             ];
             write_progress_header(
                 &mut buffer,
-                config.spinner_idx,
+                elapsed_ms,
                 "Suggesting\u{2026}",
                 &metadata,
             );
@@ -823,7 +770,7 @@ fn render_suggest_to_buffer(
             ];
             write_progress_header(
                 &mut buffer,
-                config.spinner_idx,
+                elapsed_ms,
                 "Suggesting\u{2026}",
                 &metadata,
             );
@@ -855,7 +802,7 @@ fn render_suggest_to_buffer(
                         &mut buffer,
                         i,
                         slot,
-                        config.spinner_idx,
+                        elapsed_ms,
                         compact,
                         config.term_width,
                     );
@@ -891,12 +838,12 @@ fn write_slot_to_buffer(
     buffer: &mut VirtualBuffer,
     idx: usize,
     slot: &SlotState,
-    spinner_idx: usize,
+    elapsed_ms: u64,
     compact: bool,
     term_width: usize,
 ) {
-    let spinner = SPINNER_CHARS[spinner_idx % SPINNER_CHARS.len()];
-    let prefix_width = display_width(&slot_prefix(idx, slot, spinner_idx));
+    let spinner = animation::spinner_char(elapsed_ms);
+    let prefix_width = display_width(&slot_prefix(idx, slot, elapsed_ms));
 
     // Slot number [N] in dim
     let slot_label = format!("[{}]", idx + 1);
@@ -961,7 +908,7 @@ fn write_slot_to_buffer(
                 buffer.write_str(&truncated.content);
                 if truncated.was_truncated() || content.contains('\n') {
                     buffer.set_style(Style::dim());
-                    buffer.write_str(animated_ellipsis(spinner_idx));
+                    buffer.write_str(animation::animated_ellipsis(elapsed_ms));
                 }
             } else {
                 buffer.write_str(content);
@@ -1104,7 +1051,6 @@ pub struct SuggestProgress {
     shared_slots: SharedSlots,
     start_time: Instant,
     renderer: TerminalRenderer,
-    spinner_idx: usize,
     last_render: Instant,
     /// Maximum preview display mode from user settings.
     max_preview_mode: PreviewMode,
@@ -1122,7 +1068,6 @@ impl SuggestProgress {
             shared_slots: create_shared_slots(count),
             start_time: Instant::now(),
             renderer: TerminalRenderer::new(),
-            spinner_idx: 0,
             last_render: Instant::now(),
             max_preview_mode,
         }))
@@ -1139,10 +1084,10 @@ impl SuggestProgress {
     }
 
     /// Render the current progress state.
-    /// Rate-limited to ~12.5 renders/second (80ms).
+    /// Rate-limited to [`animation::RENDER_INTERVAL_MS`].
     pub fn render(&mut self) -> io::Result<()> {
         let now = Instant::now();
-        if now.duration_since(self.last_render).as_millis() < 80 {
+        if now.duration_since(self.last_render).as_millis() < animation::RENDER_INTERVAL_MS as u128 {
             return Ok(());
         }
         self.last_render = now;
@@ -1161,10 +1106,8 @@ impl SuggestProgress {
             term_width: width as usize,
             term_height: drawable_height as usize,
             elapsed_secs: self.start_time.elapsed().as_secs_f64(),
-            spinner_idx: self.spinner_idx,
             max_preview_mode: self.max_preview_mode,
         };
-        self.spinner_idx = self.spinner_idx.wrapping_add(1);
 
         let slots = self.slots();
         let (buffer, regions) = render_suggest_to_buffer(&slots, &config);
@@ -1445,7 +1388,7 @@ mod tests {
             term_width: 80,
             term_height: 24,
             elapsed_secs: 1.0,
-            spinner_idx: 0,
+
             max_preview_mode: PreviewMode::Full,
         };
         assert_eq!(determine_display_mode(&slots, &config), DisplayMode::Full);
@@ -1461,7 +1404,7 @@ mod tests {
             term_width: 80,
             term_height: 12, // Small terminal
             elapsed_secs: 1.0,
-            spinner_idx: 0,
+
             max_preview_mode: PreviewMode::Full,
         };
         assert_eq!(determine_display_mode(&slots, &config), DisplayMode::Compact);
@@ -1485,7 +1428,7 @@ mod tests {
             term_width: 80,
             term_height: 8, // Very small terminal, can't fit 10 slots
             elapsed_secs: 1.0,
-            spinner_idx: 0,
+
             max_preview_mode: PreviewMode::Full,
         };
         assert_eq!(determine_display_mode(&slots, &config), DisplayMode::Minimal);
@@ -1565,7 +1508,7 @@ mod tests {
             term_width: 80,
             term_height: 24,
             elapsed_secs: 1.0,
-            spinner_idx: 0,
+
             char_count: 0,
             status: None,
             max_preview_mode: PreviewMode::Full,
@@ -1588,7 +1531,7 @@ mod tests {
             term_width: 80,
             term_height: 24,
             elapsed_secs: 1.0,
-            spinner_idx: 0,
+
             char_count: 10,
             status: None,
             max_preview_mode: PreviewMode::Full,
@@ -1621,7 +1564,7 @@ mod tests {
             term_width: 40,
             term_height: 5,
             elapsed_secs: 1.0,
-            spinner_idx: 0,
+
             char_count: 10,
             status: None,
             max_preview_mode: PreviewMode::Full,
@@ -1669,7 +1612,7 @@ mod tests {
             term_width: 8,
             term_height: 10,
             elapsed_secs: 1.0,
-            spinner_idx: 0,
+
             char_count: 10,
             status: None,
             max_preview_mode: PreviewMode::Full,
@@ -1681,9 +1624,9 @@ mod tests {
         }];
         let (buffer, regions) = render_explain_to_buffer(&chunks, &config);
 
-        // Header should start on row 0
+        // Header should start on row 0 with spinner for 1.0s elapsed
         let first_cell = &buffer.row(0).unwrap().cells[0];
-        assert_eq!(first_cell.ch, Some(SPINNER_CHARS[0]));
+        assert_eq!(first_cell.ch, Some(animation::spinner_char(1000)));
 
         // Should still produce regions
         assert!(!regions.is_empty());
@@ -1695,15 +1638,15 @@ mod tests {
             term_width: 8,
             term_height: 10,
             elapsed_secs: 1.0,
-            spinner_idx: 0,
+
             max_preview_mode: PreviewMode::Full,
         };
         let slots = vec![SlotState::Pending, SlotState::Pending];
         let (buffer, regions) = render_suggest_to_buffer(&slots, &config);
 
-        // Header should start on row 0
+        // Header should start on row 0 with spinner for 1.0s elapsed
         let first_cell = &buffer.row(0).unwrap().cells[0];
-        assert_eq!(first_cell.ch, Some(SPINNER_CHARS[0]));
+        assert_eq!(first_cell.ch, Some(animation::spinner_char(1000)));
 
         // Should still produce regions
         assert!(!regions.is_empty());
@@ -1715,7 +1658,7 @@ mod tests {
             term_width: 80,
             term_height: 24,
             elapsed_secs: 1.0,
-            spinner_idx: 0,
+
             max_preview_mode: PreviewMode::Full,
         };
         let slots = vec![
@@ -1750,7 +1693,7 @@ mod tests {
 
     #[test]
     fn test_slot_prefix_all_states() {
-        let spinner = SPINNER_CHARS[0]; // ⠋
+        let spinner = animation::SPINNER_CHARS[0]; // ⠋
 
         assert_eq!(
             slot_prefix(0, &SlotState::Pending, 0),
@@ -1780,7 +1723,7 @@ mod tests {
 
     #[test]
     fn test_slot_prefix_multi_digit_index() {
-        let spinner = SPINNER_CHARS[0];
+        let spinner = animation::SPINNER_CHARS[0];
         // idx=9 → slot number 10
         assert_eq!(
             slot_prefix(9, &SlotState::Pending, 0),
@@ -1905,7 +1848,7 @@ mod tests {
             term_width: 80,
             term_height: 24,
             elapsed_secs: 1.0,
-            spinner_idx: 0,
+
             max_preview_mode: PreviewMode::Full,
         };
         assert_eq!(determine_display_mode(&slots, &config), DisplayMode::Full);

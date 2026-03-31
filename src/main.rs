@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::path::Path;
 
+mod animation;
 mod backend;
 mod config;
 mod explain;
@@ -11,6 +12,7 @@ mod logger;
 mod preview;
 mod progress;
 mod render;
+mod shimmer;
 mod suggest;
 mod ui;
 
@@ -119,6 +121,10 @@ enum Command {
 
     /// Generate shell integration scripts (completions, aliases, keybindings)
     Integration(integration::IntegrationArgs),
+
+    /// Pre-compute shimmer animation frames for shell integration
+    #[command(name = "_shimmer", hide = true)]
+    Shimmer(shimmer::ShimmerArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -307,7 +313,7 @@ fn extract_config_overrides(command: &Command) -> Option<&ConfigOverrides> {
         Command::Suggest(args) => Some(&args.overrides),
         Command::Explain(args) => Some(&args.overrides),
         Command::Config(args) => Some(&args.overrides),
-        Command::Integration(_) => None,
+        Command::Integration(_) | Command::Shimmer(_) => None,
     }
 }
 
@@ -383,6 +389,9 @@ straight to suggest mode:\n\n  \
         }
         Command::Integration(args) => {
             integration::run(&bin_name(), args, config.output_format.value)?;
+        }
+        Command::Shimmer(args) => {
+            shimmer::run(args)?;
         }
     }
 

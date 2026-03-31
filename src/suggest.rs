@@ -566,7 +566,7 @@ async fn generate_suggestions(
                     }
                 }
             }
-            _ = tokio::time::sleep(Duration::from_millis(100)) => {
+            _ = tokio::time::sleep(Duration::from_millis(crate::animation::RENDER_INTERVAL_MS)) => {
                 // Render progress if available
                 if let Some(ref mut p) = progress {
                     p.render()?;

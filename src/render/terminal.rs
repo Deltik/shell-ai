@@ -169,10 +169,11 @@ impl TerminalRenderer {
         if self.cursor_row != bottom_row {
             self.emit_move_to(bottom_row, 0);
         }
-        self.output.push_str("\x1b[2K");
-
-        // Reset style at end
+        // Reset style before erasing the parking line so the line is filled
+        // with default-styled blanks — otherwise the cursor inherits whatever
+        // SGR the last diff cell left active.
         self.emit_reset();
+        self.output.push_str("\x1b[2K");
 
         // Position terminal cursor: either at the edit point or parked below
         if let Some((target_row, target_col)) = cursor {

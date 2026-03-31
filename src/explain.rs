@@ -590,7 +590,7 @@ pub async fn explain_command(command_to_explain: &str, validated: &ValidatedConf
             // Render loop while waiting for completion
             loop {
                 preview.render()?;
-                tokio::time::sleep(Duration::from_millis(80)).await;
+                tokio::time::sleep(Duration::from_millis(crate::animation::RENDER_INTERVAL_MS)).await;
 
                 if task.is_finished() {
                     break;
