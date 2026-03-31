@@ -741,7 +741,7 @@ _shai_transform() {
         set +m
         trap 'kill $pid 2>/dev/null; (( had_monitor )) && set -m; rm -f "$tmpfile"; printf "\r\033[K"; trap - INT TERM; return' INT TERM
 
-        { {bin} --frontend=noninteractive suggest -- "$original" 2>/dev/null > "$tmpfile" & } 2>/dev/null
+        { {bin} suggest --frontend=noninteractive -- "$original" 2>/dev/null > "$tmpfile" & } 2>/dev/null
         pid=$!
 
         local frame=0
@@ -796,7 +796,7 @@ _shai_transform() {
         setopt LOCAL_OPTIONS NO_NOTIFY NO_MONITOR LOCAL_TRAPS
         trap 'kill $pid 2>/dev/null; rm -f "$tmpfile"; printf "\r\033[K"; zle reset-prompt; return' INT TERM
 
-        ({bin} --frontend=noninteractive suggest -- "$original" 2>/dev/null > "$tmpfile") &!
+        ({bin} suggest --frontend=noninteractive -- "$original" 2>/dev/null > "$tmpfile") &!
         pid=$!
 
         local frame=0
@@ -857,7 +857,7 @@ function _shai_transform
         kill $__shai_pid 2>/dev/null
     end
 
-    sh -c '{bin} --frontend=noninteractive suggest -- "$1" 2>/dev/null > "$2"' _ "$cmd" "$__shai_tmp" &
+    sh -c '{bin} suggest --frontend=noninteractive -- "$1" 2>/dev/null > "$2"' _ "$cmd" "$__shai_tmp" &
     set __shai_pid $last_pid
 
     set -l frame 0
@@ -914,7 +914,7 @@ Set-PSReadLineKeyHandler -Chord 'Ctrl+g' -ScriptBlock {
 
         $job = Start-Job -ScriptBlock {
             param($l)
-            {bin} --frontend=noninteractive suggest -- $l 2>$null
+            {bin} suggest --frontend=noninteractive -- $l 2>$null
         } -ArgumentList $line
 
         $frame = 0
