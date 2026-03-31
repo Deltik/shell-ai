@@ -523,33 +523,33 @@ The shell integration file is pre-compiled to minimize shell startup overhead. H
 <details>
 <summary>Benchmark Results</summary>
 
-This is how much slower Shell-AI v0.5.1's shell integration makes shell startup:
+This is how much slower Shell-AI v0.7.1's shell integration makes shell startup:
 
 #### Baseline: Sourcing an Empty File
 
 | Shell      |    N |     Min |      Q1 |  Median |      Q3 |     Max |    Mean | Std Dev |
 |------------|-----:|--------:|--------:|--------:|--------:|--------:|--------:|--------:|
-| Bash       | 1000 |  1.06ms |  1.18ms |  1.21ms |  1.31ms |  2.95ms |  1.27ms |  0.16ms |
-| Zsh        | 1000 |  1.17ms |  1.33ms |  1.37ms |  1.45ms |  4.87ms |  1.42ms |  0.23ms |
-| Fish       | 1000 |  0.78ms |  0.88ms |  0.91ms |  0.96ms |  2.69ms |  0.94ms |  0.12ms |
-| PowerShell |  100 | 79.03ms | 81.09ms | 82.48ms | 84.91ms | 98.50ms | 83.32ms |  3.31ms |
+| Bash       | 1000 |  0.76ms |  1.14ms |  1.46ms |  1.81ms |  2.52ms |  1.48ms |  0.37ms |
+| Zsh        | 1000 |  0.59ms |  1.02ms |  1.09ms |  1.18ms |  2.07ms |  1.13ms |  0.20ms |
+| Fish       | 1000 |  0.61ms |  0.89ms |  0.97ms |  1.06ms |  2.08ms |  0.99ms |  0.15ms |
+| PowerShell |  100 | 40.03ms | 41.55ms | 42.54ms | 45.37ms | 65.86ms | 44.08ms |  4.26ms |
 
 #### Incremental Overhead (Above Baseline)
 
 | Shell      | Preset   | Overhead (Mean) |
 |------------|----------|----------------:|
 | Bash       | minimal  |         +1.56ms |
-| Bash       | standard |         +1.64ms |
-| Bash       | full     |         +2.11ms |
-| Zsh        | minimal  |         +1.98ms |
-| Zsh        | standard |         +2.05ms |
-| Zsh        | full     |         +2.43ms |
-| Fish       | minimal  |         +2.42ms |
-| Fish       | standard |         +2.56ms |
-| Fish       | full     |         +2.69ms |
-| PowerShell | minimal  |        +20.30ms |
-| PowerShell | standard |        +21.67ms |
-| PowerShell | full     |       +125.24ms |
+| Bash       | standard |         +1.34ms |
+| Bash       | full     |         +1.82ms |
+| Zsh        | minimal  |         +2.09ms |
+| Zsh        | standard |         +2.07ms |
+| Zsh        | full     |         +2.36ms |
+| Fish       | minimal  |         +1.78ms |
+| Fish       | standard |         +1.98ms |
+| Fish       | full     |         +2.05ms |
+| PowerShell | minimal  |        +12.91ms |
+| PowerShell | standard |        +14.38ms |
+| PowerShell | full     |        +62.35ms |
 
 #### Total Overhead (What Users Experience)
 
@@ -557,37 +557,37 @@ This is how much slower Shell-AI v0.5.1's shell integration makes shell startup:
 
 | Preset           |    N |    Min |     Q1 | Median |     Q3 |    Max |   Mean | Std Dev |
 |------------------|-----:|-------:|-------:|-------:|-------:|-------:|-------:|--------:|
-| blank (baseline) | 1000 | 1.06ms | 1.18ms | 1.21ms | 1.31ms | 2.95ms | 1.27ms |  0.16ms |
-| minimal          | 1000 | 2.55ms | 2.71ms | 2.78ms | 2.89ms | 3.85ms | 2.82ms |  0.17ms |
-| standard         | 1000 | 2.62ms | 2.76ms | 2.85ms | 2.98ms | 6.08ms | 2.91ms |  0.25ms |
-| full             | 1000 | 2.97ms | 3.22ms | 3.32ms | 3.47ms | 6.55ms | 3.38ms |  0.26ms |
+| blank (baseline) | 1000 | 0.76ms | 1.14ms | 1.46ms | 1.81ms | 2.52ms | 1.48ms |  0.37ms |
+| minimal          | 1000 | 1.82ms | 2.61ms | 2.85ms | 3.28ms | 5.16ms | 3.04ms |  0.70ms |
+| standard         | 1000 | 1.88ms | 2.50ms | 2.75ms | 2.95ms | 5.24ms | 2.82ms |  0.54ms |
+| full             | 1000 | 2.10ms | 2.85ms | 3.18ms | 3.44ms | 6.17ms | 3.30ms |  0.69ms |
 
 ##### Zsh
 
-| Preset           |    N |    Min |     Q1 | Median |     Q3 |    Max |   Mean | Std Dev |
-|------------------|-----:|-------:|-------:|-------:|-------:|-------:|-------:|--------:|
-| blank (baseline) | 1000 | 1.17ms | 1.33ms | 1.37ms | 1.45ms | 4.87ms | 1.42ms |  0.23ms |
-| minimal          | 1000 | 3.03ms | 3.27ms | 3.35ms | 3.47ms | 5.07ms | 3.40ms |  0.20ms |
-| standard         | 1000 | 3.07ms | 3.32ms | 3.41ms | 3.55ms | 5.86ms | 3.47ms |  0.25ms |
-| full             | 1000 | 3.40ms | 3.69ms | 3.80ms | 3.94ms | 6.20ms | 3.85ms |  0.27ms |
+| Preset           |    N |    Min |     Q1 | Median |     Q3 |     Max |   Mean | Std Dev |
+|------------------|-----:|-------:|-------:|-------:|-------:|--------:|-------:|--------:|
+| blank (baseline) | 1000 | 0.59ms | 1.02ms | 1.09ms | 1.18ms |  2.07ms | 1.13ms |  0.20ms |
+| minimal          | 1000 | 2.26ms | 2.89ms | 3.08ms | 3.31ms | 17.03ms | 3.22ms |  0.73ms |
+| standard         | 1000 | 2.27ms | 2.94ms | 3.13ms | 3.32ms |  6.06ms | 3.20ms |  0.51ms |
+| full             | 1000 | 2.44ms | 3.26ms | 3.45ms | 3.61ms |  6.56ms | 3.49ms |  0.47ms |
 
 ##### Fish
 
 | Preset           |    N |    Min |     Q1 | Median |     Q3 |    Max |   Mean | Std Dev |
 |------------------|-----:|-------:|-------:|-------:|-------:|-------:|-------:|--------:|
-| blank (baseline) | 1000 | 0.78ms | 0.88ms | 0.91ms | 0.96ms | 2.69ms | 0.94ms |  0.12ms |
-| minimal          | 1000 | 3.03ms | 3.19ms | 3.27ms | 3.44ms | 4.64ms | 3.36ms |  0.26ms |
-| standard         | 1000 | 3.15ms | 3.29ms | 3.40ms | 3.64ms | 5.50ms | 3.50ms |  0.29ms |
-| full             | 1000 | 3.30ms | 3.45ms | 3.53ms | 3.70ms | 5.58ms | 3.63ms |  0.27ms |
+| blank (baseline) | 1000 | 0.61ms | 0.89ms | 0.97ms | 1.06ms | 2.08ms | 0.99ms |  0.15ms |
+| minimal          | 1000 | 2.05ms | 2.40ms | 2.52ms | 3.13ms | 5.57ms | 2.76ms |  0.55ms |
+| standard         | 1000 | 2.08ms | 2.47ms | 2.65ms | 3.43ms | 7.23ms | 2.97ms |  0.71ms |
+| full             | 1000 | 2.28ms | 2.58ms | 2.71ms | 3.43ms | 6.56ms | 3.04ms |  0.71ms |
 
 ##### PowerShell
 
 | Preset           |   N |      Min |       Q1 |   Median |       Q3 |      Max |     Mean | Std Dev |
 |------------------|----:|---------:|---------:|---------:|---------:|---------:|---------:|--------:|
-| blank (baseline) | 100 |  79.03ms |  81.09ms |  82.48ms |  84.91ms |  98.50ms |  83.32ms |  3.31ms |
-| minimal          | 100 |  96.98ms | 101.39ms | 103.04ms | 105.27ms | 118.27ms | 103.62ms |  3.95ms |
-| standard         | 100 |  99.77ms | 103.34ms | 104.47ms | 106.13ms | 115.67ms | 104.98ms |  3.12ms |
-| full             | 100 | 200.65ms | 205.15ms | 207.09ms | 209.94ms | 241.00ms | 208.55ms |  5.94ms |
+| blank (baseline) | 100 |  40.03ms |  41.55ms |  42.54ms |  45.37ms |  65.86ms |  44.08ms |  4.26ms |
+| minimal          | 100 |  53.05ms |  54.47ms |  55.76ms |  58.28ms |  94.71ms |  56.99ms |  4.97ms |
+| standard         | 100 |  53.36ms |  55.57ms |  57.44ms |  59.95ms |  87.91ms |  58.47ms |  5.07ms |
+| full             | 100 | 100.02ms | 102.02ms | 103.46ms | 107.74ms | 172.52ms | 106.43ms | 10.15ms |
 
 #### Methodology
 
