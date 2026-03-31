@@ -105,7 +105,7 @@ Run `shell-ai --help` for all options, or `shell-ai config schema` for the full 
 
 ### JSON Output for Scripting
 
-[![shell-ai --frontend=noninteractive --output-format=json explain -- ls -lhtr | jq '.'](docs/images/explain-ls-lhtr.png)](docs/images/explain-ls-lhtr.png)
+[![shell-ai explain --frontend=noninteractive --output-format=json -- ls -lhtr | jq '.'](docs/images/explain-ls-lhtr.png)](docs/images/explain-ls-lhtr.png)
 
 ### Configuration Introspection
 
