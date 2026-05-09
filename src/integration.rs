@@ -741,6 +741,7 @@ _shai_transform() {
 
         { {bin} suggest --frontend=noninteractive -- "$original" 2>/dev/null > "$tmpfile" & } 2>/dev/null
         pid=$!
+        disown $pid 2>/dev/null
 
         local prev_cols
         read -r _ prev_cols < <(stty size </dev/tty 2>/dev/null) || prev_cols=80

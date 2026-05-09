@@ -7,6 +7,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.7.2 (UNRELEASED)
+
+### Fixed
+
+- **Bash 5.3 keybinding integration: stale "Done" notification corrupting the spinner**
+
+  In Bash 5.3, the Ctrl+G spinner was overwritten by a `[1]+ Done shell-ai suggest ...` job-completion notification just before the suggested command was rendered. The existing `set +m` and `{ cmd & } 2>/dev/null` patterns no longer silence these notifications inside a `bind -x` handler in 5.3; the parent shell prints them at the next readline sync point regardless. The integration now `disown`s the backgrounded suggestion process so the shell stops tracking it as a job. Run `shell-ai integration update` to regenerate your integration scripts.
+
 ## v0.7.1 (2026-03-31)
 
 ### Added
