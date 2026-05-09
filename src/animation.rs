@@ -55,10 +55,12 @@ pub fn spinner_char(elapsed_ms: u64) -> char {
 ///
 /// A sine ease-in-out curve makes the wave enter slowly, accelerate through
 /// the middle of the text, and decelerate as it exits — giving the animation
-/// a subtle breathing quality.
+/// a subtle breathing quality.  The margin is one position past the
+/// near-glow boundary so the slow ease-in/out lingers in the dim
+/// off-screen zone instead of pausing visibly on the first/last character.
 pub fn shimmer_pos(elapsed_ms: u64, text_len: usize) -> isize {
-    let margin = flourish_near_radius(text_len);
-    let travel = text_len + 2 * margin + 2; // +2 for dark pause
+    let margin = flourish_near_radius(text_len) + 1;
+    let travel = text_len + 2 * margin;
     let t = (elapsed_ms % SHIMMER_CYCLE_MS) as f64 / SHIMMER_CYCLE_MS as f64;
     let eased = (1.0 - (t * std::f64::consts::PI).cos()) / 2.0;
     (eased * travel as f64) as isize - margin as isize

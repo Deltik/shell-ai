@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   In Bash 5.3, the Ctrl+G spinner was overwritten by a `[1]+ Done shell-ai suggest ...` job-completion notification just before the suggested command was rendered. The existing `set +m` and `{ cmd & } 2>/dev/null` patterns no longer silence these notifications inside a `bind -x` handler in 5.3; the parent shell prints them at the next readline sync point regardless. The integration now `disown`s the backgrounded suggestion process so the shell stops tracking it as a job. Run `shell-ai integration update` to regenerate your integration scripts.
 
+- **Shimmer animation: awkward pause on the first character**
+
+  The sine ease-in-out shimmer added in v0.7.1 placed the slowest part of its curve directly on top of the first text character, which was rendered at the near-glow boundary at the start of each cycle. The wave lingered there visibly for ~100 ms before moving on. The entry margin was off by one position from the dim "off-screen" zone — `margin = near_radius` made the leftmost character at `dist = near_radius`, which still styles as cyan. Increasing `margin` by one moves the slow ease-in into the dim region so the wave appears to glide in smoothly.
+
 ## v0.7.1 (2026-03-31)
 
 ### Added
