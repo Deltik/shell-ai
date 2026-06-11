@@ -7,6 +7,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.7.3 (UNRELEASED)
+
+### Added
+
+- **OpenAI Codex CLI provider (`provider = "codex"`)**
+
+  Drives `shell-ai suggest` and `shell-ai explain` through the [OpenAI Codex CLI](https://github.com/openai/codex) as a subprocess, mirroring the existing Claude Code provider. Authentication and model selection are handled by Codex itself (`codex login` or `OPENAI_API_KEY`), so no API key configuration is needed in Shell-AI.
+
+  Codex runs in a locked-down mode (read-only sandbox, agent tools disabled), so it only writes answers and never executes commands. Each request includes Codex's built-in agent instructions (on the order of 10k input tokens; may vary by Codex version), so this provider uses more quota per call than the OpenAI HTTP provider — choose it to reuse a ChatGPT/Codex subscription instead of provisioning an API key.
+
+  `cli_path` defaults to `codex`. If you don't have a global install, multi-word commands work too, e.g. `cli_path = "npx @openai/codex@latest"`.
+
 ## v0.7.2 (2026-05-09)
 
 ### Fixed

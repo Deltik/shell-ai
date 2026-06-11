@@ -4,14 +4,17 @@
 //! - OpenAI-compatible HTTP APIs (OpenAI, Groq, Azure, Ollama, Mistral)
 //! - Native Anthropic Messages API
 //! - Claude Code CLI (subprocess-based)
+//! - OpenAI Codex CLI (subprocess-based)
 
 mod anthropic;
 mod claude_code;
+mod codex;
 pub mod correction;
 mod openai;
 
 pub use anthropic::AnthropicBackend;
 pub use claude_code::ClaudeCodeBackend;
+pub use codex::CodexBackend;
 pub use openai::OpenAiBackend;
 
 use anyhow::Result;

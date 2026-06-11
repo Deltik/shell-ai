@@ -68,7 +68,7 @@ ln -v -s shell-ai ~/.cargo/bin/shai  # Optional: shorthand alias for `shell-ai s
 - **Shell integration:** Tab completions, aliases, and Ctrl+G keybinding via `shell-ai integration generate`.
 - **Multilingual:** Describe tasks in any language the AI model understands. Responses adapt to your system locale.
 - **Explain from `man`:** `shell-ai explain` includes grounding from man pages, not just AI knowledge.
-- **Multiple providers:** OpenAI, Azure OpenAI, Anthropic, Claude Code CLI – plus OpenAI-compatible services (Groq, Ollama, Mistral) and Anthropic-compatible services (Ollama v0.14.0+).
+- **Multiple providers:** OpenAI, Azure OpenAI, Anthropic, Claude Code CLI, OpenAI Codex CLI – plus OpenAI-compatible services (Groq, Ollama, Mistral) and Anthropic-compatible services (Ollama v0.14.0+).
 - **Interactive workflow:** Select a suggestion, then explain it, execute it, copy it, or revise it.
 - **Live streaming previews:** Watch suggestions and explanations generate token-by-token instead of waiting for the full response.
 - **Vim-style navigation:** j/k keys, number shortcuts (1-9), arrow keys.
@@ -183,13 +183,13 @@ Set the provider in your config file:
 The provider-specific settings go in a section named after the provider.
 
 ```toml
-provider = "openai"  # or: anthropic, claudecode
+provider = "openai"  # or: anthropic, claudecode, codex
 ```
 
 Shell-AI may alternatively be configured by environment variables, which override the config file:
 
 ```bash
-export SHAI_API_PROVIDER=openai  # or: anthropic, claudecode
+export SHAI_API_PROVIDER=openai  # or: anthropic, claudecode, codex
 ```
 
 > [!TIP]
@@ -365,6 +365,38 @@ No API key or login configuration needed; Claude Code manages its own authentica
 ```
 
 **Requirements:** Claude Code CLI installed and authenticated (`claude` command available in PATH, or specify full path via `cli_path`).
+
+</details>
+
+#### OpenAI Codex
+
+Uses the [OpenAI Codex CLI](https://github.com/openai/codex) in non-interactive mode (`codex exec --json`).
+No API key or login configuration is needed in Shell-AI; Codex manages its own authentication via `codex login` or `OPENAI_API_KEY`.
+
+Shell-AI runs Codex in a locked-down mode (read-only sandbox, agent tools disabled), so it only writes answers and never runs commands on your machine.
+
+> [!NOTE]
+> Codex sends its built-in agent instructions with every request (roughly 10,000 input tokens at the time of writing), so each call uses more quota than a plain API call. Choose this provider to reuse a ChatGPT/Codex subscription instead of paying for a separate OpenAI API key.
+
+<details>
+<summary>Configuration</summary>
+
+```toml
+[codex]
+# cli_path = "codex"  # codex executable; multi-word commands work too,
+                      # e.g. cli_path = "npx @openai/codex@latest"
+# model = ""          # e.g., gpt-5.4-mini; empty = your Codex default
+```
+
+```bash
+# export CODEX_CLI_PATH=codex
+# export CODEX_MODEL=
+```
+
+**Requirements:** Codex CLI installed and authenticated. Either:
+
+- Install globally (e.g. `npm install -g @openai/codex` or `brew install codex`), then run `codex login`.
+- Or set `cli_path = "npx @openai/codex@latest"` to invoke it via `npx` without a global install.
 
 </details>
 

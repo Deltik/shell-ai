@@ -126,6 +126,9 @@ pub enum Provider {
     #[serde(alias = "claudecode", alias = "claude-code", alias = "claude_code")]
     #[clap(alias = "claude-code")]
     ClaudeCode,
+    #[serde(alias = "codex", alias = "openai-codex", alias = "openai_codex", alias = "openaicodex")]
+    #[clap(alias = "openai-codex")]
+    Codex,
 }
 
 /// Debug/logging level.
@@ -236,6 +239,10 @@ pub mod env {
     // Claude Code provider (subprocess-based)
     pub const CLAUDE_CODE_CLI_PATH: &str = "CLAUDE_CODE_CLI_PATH";
     pub const CLAUDE_CODE_MODEL: &str = "CLAUDE_CODE_MODEL";
+
+    // OpenAI Codex provider (subprocess-based)
+    pub const CODEX_CLI_PATH: &str = "CODEX_CLI_PATH";
+    pub const CODEX_MODEL: &str = "CODEX_MODEL";
 }
 
 // ============================================================================
@@ -652,6 +659,23 @@ pub const PROVIDER_METADATA: &[ProviderMeta] = &[
         ],
         skip_common: &["api_key", "api_base", "max_tokens"], // Claude Code CLI doesn't use HTTP or support max_tokens
     },
+    ProviderMeta {
+        name: "codex",
+        display_name: "OpenAI Codex",
+        description: "OpenAI Codex CLI (subprocess, non-interactive mode)",
+        field_overrides: &[
+            FieldOverride { name: "api_key", env_var: None, default: None, required: Some(false) },
+            FieldOverride { name: "api_base", env_var: None, default: None, required: Some(false) },
+            FieldOverride { name: "model", env_var: Some(env::CODEX_MODEL), default: None, required: None },
+        ],
+        extra_fields: &[
+            FieldMeta::new("cli_path", "Path to codex CLI executable (POSIX-shell parsed, e.g. \"npx @openai/codex@latest\")")
+                .env(env::CODEX_CLI_PATH)
+                .section(Section::ProviderSpecific)
+                .default("codex"),
+        ],
+        skip_common: &["api_key", "api_base", "max_tokens"], // Codex CLI doesn't use HTTP or support max_tokens
+    },
 ];
 
 impl Provider {
@@ -1028,6 +1052,7 @@ pub struct TomlConfig {
     pub mistral: Option<ProviderCredentials>,
     pub anthropic: Option<ProviderCredentials>,
     pub claudecode: Option<ProviderCredentials>,
+    pub codex: Option<ProviderCredentials>,
 }
 
 /// Unified application configuration with source tracking.
@@ -1098,7 +1123,7 @@ impl<'a> ValidatedConfig<'a> {
 
     /// Create the appropriate backend for this validated configuration..
     pub fn create_backend(&self) -> Box<dyn crate::backend::Backend> {
-        use crate::backend::{AnthropicBackend, ClaudeCodeBackend, OpenAiBackend};
+        use crate::backend::{AnthropicBackend, ClaudeCodeBackend, CodexBackend, OpenAiBackend};
 
         let temperature = self.temperature();
         let max_tokens = self.effective_max_tokens();
@@ -1203,6 +1228,15 @@ impl<'a> ValidatedConfig<'a> {
                     if m.is_empty() { None } else { Some(m) }
                 };
                 Box::new(ClaudeCodeBackend::new(cli_path, model))
+            }
+            Provider::Codex => {
+                let cli_path = self.credentials.cli_path.clone()
+                    .unwrap_or_else(|| "codex".to_string());
+                let model = {
+                    let m = self.effective_model();
+                    if m.is_empty() { None } else { Some(m) }
+                };
+                Box::new(CodexBackend::new(cli_path, model))
             }
         }
     }
@@ -1310,6 +1344,9 @@ impl AppConfig {
         }
         if let Some(creds) = parsed.claudecode {
             providers.insert(Provider::ClaudeCode, creds);
+        }
+        if let Some(creds) = parsed.codex {
+            providers.insert(Provider::Codex, creds);
         }
 
         // Ensure all providers have at least default credentials
