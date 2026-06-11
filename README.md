@@ -113,24 +113,11 @@ Run `shell-ai --help` for all options, or `shell-ai config schema` for the full 
 
 ## Configuration
 
-Shell-AI loads configuration from multiple sources (highest priority first):
+Shell-AI reads its settings from a config file:
 
-1. CLI flags (`--provider`, `--model`, etc.)
-2. Environment variables (`SHAI_API_PROVIDER`, `OPENAI_API_KEY`, etc.)
-3. Legacy JSON config file (`config.json`, same directory as TOML config file; see below)
-4. TOML config file (`config.toml`; see paths below)
-5. Built-in defaults
-
-Config file locations:
 - **Linux**: `~/.config/shell-ai/config.toml`
 - **macOS**: `~/Library/Application Support/shell-ai/config.toml`
 - **Windows**: `%APPDATA%\shell-ai\config.toml`
-
-Generate a documented config template:
-
-```bash
-shell-ai config init
-```
 
 Example config:
 
@@ -139,8 +126,29 @@ provider = "openai"
 
 [openai]
 api_key = "sk-..."
-model = "gpt-4o"
+model = "gpt-5.4-mini"
 ```
+
+Generate a documented config template:
+
+```bash
+shell-ai config init
+```
+
+Anything in the config file can also be set with environment variables (`SHAI_API_PROVIDER`, `OPENAI_API_KEY`, etc.) or CLI flags (`--provider`, `--model`, etc.), which take precedence over the file.
+
+<details>
+<summary>Full precedence order</summary>
+
+Shell-AI loads configuration from multiple sources (highest priority first):
+
+1. CLI flags (`--provider`, `--model`, etc.)
+2. Environment variables (`SHAI_API_PROVIDER`, `OPENAI_API_KEY`, etc.)
+3. Legacy JSON config file (`config.json`, same directory as TOML config file; see below)
+4. TOML config file (`config.toml`; see paths above)
+5. Built-in defaults
+
+</details>
 
 <details>
 <summary>Legacy JSON config (from ricklamers/shell-ai)</summary>
@@ -161,7 +169,7 @@ TOML-style keys also work in the JSON file:
   "provider": "openai",
   "openai": {
     "api_key": "sk-...",
-    "model": "gpt-4o"
+    "model": "gpt-5.4-mini"
   }
 }
 ```
@@ -174,22 +182,16 @@ The JSON file takes precedence over the TOML file (matching how environment vari
 
 ### Providers
 
-Set the provider in your config file:
-
-- **Linux:** `~/.config/shell-ai/config.toml`
-- **macOS:** `~/Library/Application Support/shell-ai/config.toml`
-- **Windows:** `%APPDATA%\shell-ai\config.toml`
-
-The provider-specific settings go in a section named after the provider.
+Set the provider in your config file ([locations above](#configuration)), with the provider-specific settings in a section named after it:
 
 ```toml
-provider = "openai"  # or: anthropic, claudecode, codex
+provider = "openai"  # one of: openai, groq, ollama, mistral, azure, anthropic, claudecode, codex
 ```
 
 Shell-AI may alternatively be configured by environment variables, which override the config file:
 
 ```bash
-export SHAI_API_PROVIDER=openai  # or: anthropic, claudecode, codex
+export SHAI_API_PROVIDER=openai
 ```
 
 > [!TIP]
@@ -419,87 +421,9 @@ shai --effort=low 'list files larger than 1MB'  # one-off override
 
 A per-provider value can also go in the provider's config section, e.g. `[codex]` `effort = "low"`.
 
-Lower effort means lower latency and cheaper responses—recommended for quick command suggestions. Shell-AI sends the value as it is, and the provider validates it.
+Providers that support effort typically understand `low`, `medium`, and `high`; some accept more levels (Claude: `xhigh` and `max`; Codex: `none`, `minimal`, and `xhigh`). Shell-AI sends the value as it is, and the provider validates it.
 
-### Advanced
-
-#### Custom cURL Binary
-
-Shell-AI uses a built-in HTTP client ([ureq](https://crates.io/crates/ureq) with rustls) by default. For situations where you need more control over the HTTP transport, you can configure Shell-AI to use an external `curl`-compatible binary instead.
-
-##### Use Cases
-
-- **TLS fingerprint bypass:** Some API providers ([like Groq](https://web.archive.org/web/20260325030530/https://megalodon.jp/2026-0325-1204-25/https://community.groq.com:443/t/ip-address-range-blocked-by-cloudflare/728)) use Cloudflare bot protection that fingerprints TLS handshakes. The built-in client's TLS fingerprint can be detected and blocked. [curl-impersonate](https://github.com/lexiforest/curl-impersonate) mimics real browser TLS fingerprints to bypass this.
-- **Client certificates:** Authenticate to APIs that require mTLS.
-- **Custom TLS settings:** Use specific cipher suites, TLS versions, or CA bundles.
-- **Network debugging:** Route through a verbose proxy or log request details.
-- **Corporate proxies:** Use NTLM or Kerberos proxy authentication that the built-in client doesn't support.
-
-##### Configuration
-
-```bash
-# Environment variable
-export SHAI_CURL=curl-impersonate
-
-# Or in config.toml
-curl_cmd = "curl-impersonate"
-```
-
-The command is parsed using POSIX shell quoting rules, so extra arguments work naturally:
-
-```bash
-export SHAI_CURL='curl --cacert /path/to/custom-ca.pem'
-```
-
-The configured binary must accept standard curl flags (`-s`, `-S`, `-i`, `--no-buffer`, `-H`, `-d @-`, `--max-time`). Shell-AI passes the request body via stdin and reads the response (headers + body) from stdout.
-
-##### With [curl-impersonate](https://github.com/lexiforest/curl-impersonate)
-
-```bash
-# Install curl-impersonate (https://github.com/lexiforest/curl-impersonate)
-# Then configure Shell-AI to use it:
-export SHAI_CURL=curl-impersonate
-export CURL_IMPERSONATE=firefox147  # browser to impersonate (handled by curl-impersonate, not Shell-AI)
-```
-
-> [!TIP]
-> Shell-AI also auto-detects `libcurl-impersonate.so` at runtime (including via `LD_PRELOAD`) and uses it without any configuration. The `curl_cmd` setting is for when you want to use a specific binary or pass extra arguments.
-
-<details>
-<summary>curl-impersonate libcurl Example</summary>
-
-Before:
-
-```shell
-deltik@box53 [~]$ shell-ai suggest -- 'get boot time in UTC'
-Error: No suggestions could be generated.
-Reason: API error: HTTP 403: {"error":{"message":"Access denied. Please check your network settings."}}
-```
-
-After:
-
-```shell
-deltik@box53 [~]$ LD_PRELOAD=/tmp/curl-impersonate/build/curl-8_15_0/lib/.libs/libcurl-impersonate.so.4.8.0 CURL_IMPERSONATE=firefox147 shell-ai suggest -- 'get boot time in UTC'
-Select a command:
-  [1] date -u -d @$(($(date +%s) - $(awk '{print int($1)}' /proc/uptime)))
-   2  date -u -d "$(who -b | awk '{print $3\" \" $4}')" +"%Y-%m-%d %H:%M:%S %Z"
-   3  date -u -d @$(($(date +%s) - $(awk '{print int($1)}' /proc/uptime))) +"%Y-%m-%d %H:%M:%S UTC"
-   g  Generate new suggestions
-   n  Enter a new command
-   q  Quit
-
-↑↓/jk navigate • key/Enter select • Esc quit
-```
-
-</details>
-
-##### HTTP Backend Priority
-
-Shell-AI will try the following HTTP backends in order:
-
-1. `curl_cmd` / `SHAI_CURL`: Configured curl-compatible binary (subprocess)
-2. `libcurl-impersonate.so`: Auto-detected library (in-process, zero config)
-3. Built-in ureq: Default, always available
+Lower effort means lower latency and cheaper responses—recommended for quick command suggestions.
 
 ## Shell Integration
 
@@ -647,6 +571,86 @@ This is how much slower Shell-AI v0.7.1's shell integration makes shell startup:
 To reproduce these benchmarks, run `cargo run --package xtask -- bench-integration [sample_count]` from this repository.
 
 </details>
+
+## Advanced
+
+### Custom cURL Binary
+
+Shell-AI uses a built-in HTTP client ([ureq](https://crates.io/crates/ureq) with rustls) by default. For situations where you need more control over the HTTP transport, you can configure Shell-AI to use an external `curl`-compatible binary instead.
+
+#### Use Cases
+
+- **TLS fingerprint bypass:** Some API providers ([like Groq](https://web.archive.org/web/20260325030530/https://megalodon.jp/2026-0325-1204-25/https://community.groq.com:443/t/ip-address-range-blocked-by-cloudflare/728)) use Cloudflare bot protection that fingerprints TLS handshakes. The built-in client's TLS fingerprint can be detected and blocked. [curl-impersonate](https://github.com/lexiforest/curl-impersonate) mimics real browser TLS fingerprints to bypass this.
+- **Client certificates:** Authenticate to APIs that require mTLS.
+- **Custom TLS settings:** Use specific cipher suites, TLS versions, or CA bundles.
+- **Network debugging:** Route through a verbose proxy or log request details.
+- **Corporate proxies:** Use NTLM or Kerberos proxy authentication that the built-in client doesn't support.
+
+#### Configuration
+
+```bash
+# Environment variable
+export SHAI_CURL=curl-impersonate
+
+# Or in config.toml
+curl_cmd = "curl-impersonate"
+```
+
+The command is parsed using POSIX shell quoting rules, so extra arguments work naturally:
+
+```bash
+export SHAI_CURL='curl --cacert /path/to/custom-ca.pem'
+```
+
+The configured binary must accept standard curl flags (`-s`, `-S`, `-i`, `--no-buffer`, `-H`, `-d @-`, `--max-time`). Shell-AI passes the request body via stdin and reads the response (headers + body) from stdout.
+
+#### With [curl-impersonate](https://github.com/lexiforest/curl-impersonate)
+
+```bash
+# Install curl-impersonate (https://github.com/lexiforest/curl-impersonate)
+# Then configure Shell-AI to use it:
+export SHAI_CURL=curl-impersonate
+export CURL_IMPERSONATE=firefox147  # browser to impersonate (handled by curl-impersonate, not Shell-AI)
+```
+
+> [!TIP]
+> Shell-AI also auto-detects `libcurl-impersonate.so` at runtime (including via `LD_PRELOAD`) and uses it without any configuration. The `curl_cmd` setting is for when you want to use a specific binary or pass extra arguments.
+
+<details>
+<summary>curl-impersonate libcurl Example</summary>
+
+Before:
+
+```shell
+deltik@box53 [~]$ shell-ai suggest -- 'get boot time in UTC'
+Error: No suggestions could be generated.
+Reason: API error: HTTP 403: {"error":{"message":"Access denied. Please check your network settings."}}
+```
+
+After:
+
+```shell
+deltik@box53 [~]$ LD_PRELOAD=/tmp/curl-impersonate/build/curl-8_15_0/lib/.libs/libcurl-impersonate.so.4.8.0 CURL_IMPERSONATE=firefox147 shell-ai suggest -- 'get boot time in UTC'
+Select a command:
+  [1] date -u -d @$(($(date +%s) - $(awk '{print int($1)}' /proc/uptime)))
+   2  date -u -d "$(who -b | awk '{print $3\" \" $4}')" +"%Y-%m-%d %H:%M:%S %Z"
+   3  date -u -d @$(($(date +%s) - $(awk '{print int($1)}' /proc/uptime))) +"%Y-%m-%d %H:%M:%S UTC"
+   g  Generate new suggestions
+   n  Enter a new command
+   q  Quit
+
+↑↓/jk navigate • key/Enter select • Esc quit
+```
+
+</details>
+
+#### HTTP Backend Priority
+
+Shell-AI will try the following HTTP backends in order:
+
+1. `curl_cmd` / `SHAI_CURL`: Configured curl-compatible binary (subprocess)
+2. `libcurl-impersonate.so`: Auto-detected library (in-process, zero config)
+3. Built-in ureq: Default, always available
 
 ## Migrating from Python Shell-AI
 
