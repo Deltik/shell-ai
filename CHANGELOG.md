@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   `cli_path` defaults to `codex`. If you don't have a global install, multi-word commands work too, e.g. `cli_path = "npx @openai/codex@latest"`.
 
+- **Model effort control (`effort` / `SHAI_EFFORT` / `--effort`)**
+
+  All providers now support an optional effort/reasoning level, set globally (`effort` in the config file, `SHAI_EFFORT`, or the new `--effort` flag) or per provider (e.g. `[codex]` `effort = "low"` or `CODEX_EFFORT`). Lower effort gives faster, cheaper responses — usually plenty for command suggestions.
+
+  Shell-AI passes the value through unvalidated, so new levels work without a Shell-AI update: OpenAI-compatible APIs receive `reasoning_effort`, Anthropic receives `output_config.effort`, Claude Code is invoked with `--effort`, and Codex with `-c model_reasoning_effort=...`. Accepted values vary by provider (see the README's Model Effort section); the provider rejects invalid ones with its own error message.
+
 ## v0.7.2 (2026-05-09)
 
 ### Fixed

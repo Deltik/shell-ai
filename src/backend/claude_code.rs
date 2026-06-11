@@ -10,11 +10,12 @@ const MAX_ERRORS: usize = 3;
 pub struct ClaudeCodeBackend {
     cli_path: String,
     model: Option<String>,
+    effort: Option<String>,
 }
 
 impl ClaudeCodeBackend {
-    pub fn new(cli_path: String, model: Option<String>) -> Self {
-        Self { cli_path, model }
+    pub fn new(cli_path: String, model: Option<String>, effort: Option<String>) -> Self {
+        Self { cli_path, model, effort }
     }
 
     fn build_prompt(request: &CompletionRequest) -> String {
@@ -50,6 +51,9 @@ impl ClaudeCodeBackend {
 
         if let Some(ref model) = self.model {
             cmd.arg("--model").arg(model);
+        }
+        if let Some(ref effort) = self.effort {
+            cmd.arg("--effort").arg(effort);
         }
         if let Some(ref schema) = request.json_schema {
             let schema_str = serde_json::to_string(schema)

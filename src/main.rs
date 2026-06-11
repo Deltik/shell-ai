@@ -44,6 +44,10 @@ pub struct ConfigOverrides {
     #[arg(long = "model")]
     pub model: Option<String>,
 
+    /// Model effort/reasoning level override (e.g. low, medium, high; accepted values vary by provider)
+    #[arg(long = "effort")]
+    pub effort: Option<String>,
+
     /// Max tokens for an AI completion
     #[arg(long = "max-tokens")]
     pub max_tokens: Option<u32>,
@@ -297,6 +301,7 @@ fn build_cli_overrides(global: &GlobalOptions, overrides: Option<&ConfigOverride
     CliOverrides {
         provider: overrides.and_then(|o| o.provider.map(|p| p.to_string())),
         model: overrides.and_then(|o| o.model.clone()),
+        effort: overrides.and_then(|o| o.effort.clone()),
         max_tokens: overrides.and_then(|o| o.max_tokens),
         temperature: overrides.and_then(|o| o.temperature),
         frontend: overrides.and_then(|o| o.frontend.map(|f| f.to_string())),

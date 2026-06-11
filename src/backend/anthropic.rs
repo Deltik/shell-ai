@@ -27,16 +27,25 @@ pub struct AnthropicBackend {
     model: String,
     /// Maximum tokens in the response (required by Anthropic API)
     max_tokens: Option<u32>,
+    /// Effort level (e.g., "low", "medium", "high", "xhigh", "max"); sent verbatim
+    effort: Option<String>,
 }
 
 impl AnthropicBackend {
     /// Create a new Anthropic backend.
-    pub fn new(base_url: String, api_key: Option<String>, model: String, max_tokens: Option<u32>) -> Self {
+    pub fn new(
+        base_url: String,
+        api_key: Option<String>,
+        model: String,
+        max_tokens: Option<u32>,
+        effort: Option<String>,
+    ) -> Self {
         Self {
             base_url,
             api_key,
             model,
             max_tokens,
+            effort,
         }
     }
 
@@ -62,6 +71,12 @@ impl AnthropicBackend {
                     "schema": schema
                 }
             });
+        }
+
+        // Effort lives in output_config alongside format; indexing creates the
+        // object if no schema set it above
+        if let Some(ref effort) = self.effort {
+            payload["output_config"]["effort"] = json!(effort);
         }
 
         payload
@@ -175,5 +190,65 @@ impl Backend for AnthropicBackend {
 
         // This should be unreachable, but just in case
         Err(BackendError::RateLimited("Max retries exceeded".to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(schema: Option<serde_json::Value>) -> CompletionRequest {
+        CompletionRequest {
+            system_messages: vec![],
+            message_history: vec![],
+            user_message: "Hello".to_string(),
+            json_schema: schema,
+            schema_name: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_build_payload_effort_without_schema() {
+        let backend = AnthropicBackend::new(
+            "https://api.anthropic.com".to_string(),
+            Some("sk-ant-test".to_string()),
+            "claude-sonnet-4-5".to_string(),
+            None,
+            Some("medium".to_string()),
+        );
+
+        let payload = backend.build_payload(&request(None), false);
+        assert_eq!(payload["output_config"]["effort"], "medium");
+        assert!(payload["output_config"].get("format").is_none());
+    }
+
+    #[test]
+    fn test_build_payload_effort_alongside_schema_format() {
+        let backend = AnthropicBackend::new(
+            "https://api.anthropic.com".to_string(),
+            Some("sk-ant-test".to_string()),
+            "claude-sonnet-4-5".to_string(),
+            None,
+            Some("max".to_string()),
+        );
+
+        let schema = serde_json::json!({"type": "object", "additionalProperties": false});
+        let payload = backend.build_payload(&request(Some(schema.clone())), false);
+        assert_eq!(payload["output_config"]["effort"], "max");
+        assert_eq!(payload["output_config"]["format"]["schema"], schema);
+    }
+
+    #[test]
+    fn test_build_payload_no_effort_no_output_config() {
+        let backend = AnthropicBackend::new(
+            "https://api.anthropic.com".to_string(),
+            Some("sk-ant-test".to_string()),
+            "claude-sonnet-4-5".to_string(),
+            None,
+            None,
+        );
+
+        let payload = backend.build_payload(&request(None), false);
+        assert!(payload.get("output_config").is_none());
     }
 }

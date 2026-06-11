@@ -400,6 +400,27 @@ Shell-AI runs Codex in a locked-down mode (read-only sandbox, agent tools disabl
 
 </details>
 
+### Model Effort
+
+Most modern models can trade answer quality against speed and cost. The optional `effort` setting passes your preferred level through to the provider:
+
+```toml
+effort = "low"  # applies to whichever provider is active
+```
+
+```bash
+export SHAI_EFFORT=low   # global
+export CODEX_EFFORT=low  # or per provider: OPENAI_EFFORT, ANTHROPIC_EFFORT, CLAUDE_CODE_EFFORT, ...
+```
+
+```bash
+shai --effort=low 'list files larger than 1MB'  # one-off override
+```
+
+A per-provider value can also go in the provider's config section, e.g. `[codex]` `effort = "low"`.
+
+Lower effort means lower latency and cheaper responses—recommended for quick command suggestions. Shell-AI sends the value as it is, and the provider validates it.
+
 ### Advanced
 
 #### Custom cURL Binary

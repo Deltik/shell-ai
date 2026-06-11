@@ -188,6 +188,7 @@ pub mod env {
     pub const SHAI_API_PROVIDER: &str = "SHAI_API_PROVIDER";
     pub const SHAI_PROVIDER: &str = "SHAI_PROVIDER"; // Alias
     pub const SHAI_MODEL: &str = "SHAI_MODEL";
+    pub const SHAI_EFFORT: &str = "SHAI_EFFORT";
     pub const SHAI_TEMPERATURE: &str = "SHAI_TEMPERATURE";
     pub const SHAI_SUGGESTION_COUNT: &str = "SHAI_SUGGESTION_COUNT";
     pub const SHAI_SKIP_CONFIRM: &str = "SHAI_SKIP_CONFIRM"; // Legacy, implies noninteractive
@@ -204,6 +205,7 @@ pub mod env {
     pub const OPENAI_API_KEY: &str = "OPENAI_API_KEY";
     pub const OPENAI_API_BASE: &str = "OPENAI_API_BASE";
     pub const OPENAI_MODEL: &str = "OPENAI_MODEL";
+    pub const OPENAI_EFFORT: &str = "OPENAI_EFFORT";
     pub const OPENAI_ORGANIZATION: &str = "OPENAI_ORGANIZATION";
     pub const OPENAI_MAX_TOKENS: &str = "OPENAI_MAX_TOKENS";
     pub const OPENAI_API_VERSION: &str = "OPENAI_API_VERSION"; // Also used by Azure
@@ -211,38 +213,45 @@ pub mod env {
     // Groq provider
     pub const GROQ_API_KEY: &str = "GROQ_API_KEY";
     pub const GROQ_MODEL: &str = "GROQ_MODEL";
+    pub const GROQ_EFFORT: &str = "GROQ_EFFORT";
     pub const GROQ_MAX_TOKENS: &str = "GROQ_MAX_TOKENS";
 
     // Azure provider
     pub const AZURE_API_KEY: &str = "AZURE_API_KEY";
     pub const AZURE_API_BASE: &str = "AZURE_API_BASE";
     pub const AZURE_DEPLOYMENT_NAME: &str = "AZURE_DEPLOYMENT_NAME";
+    pub const AZURE_EFFORT: &str = "AZURE_EFFORT";
     pub const AZURE_MAX_TOKENS: &str = "AZURE_MAX_TOKENS";
 
     // Ollama provider
     pub const OLLAMA_API_BASE: &str = "OLLAMA_API_BASE";
     pub const OLLAMA_MODEL: &str = "OLLAMA_MODEL";
+    pub const OLLAMA_EFFORT: &str = "OLLAMA_EFFORT";
     pub const OLLAMA_MAX_TOKENS: &str = "OLLAMA_MAX_TOKENS";
 
     // Mistral provider
     pub const MISTRAL_API_KEY: &str = "MISTRAL_API_KEY";
     pub const MISTRAL_API_BASE: &str = "MISTRAL_API_BASE";
     pub const MISTRAL_MODEL: &str = "MISTRAL_MODEL";
+    pub const MISTRAL_EFFORT: &str = "MISTRAL_EFFORT";
     pub const MISTRAL_MAX_TOKENS: &str = "MISTRAL_MAX_TOKENS";
 
     // Anthropic provider
     pub const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
     pub const ANTHROPIC_API_BASE: &str = "ANTHROPIC_API_BASE";
     pub const ANTHROPIC_MODEL: &str = "ANTHROPIC_MODEL";
+    pub const ANTHROPIC_EFFORT: &str = "ANTHROPIC_EFFORT";
     pub const ANTHROPIC_MAX_TOKENS: &str = "ANTHROPIC_MAX_TOKENS";
 
     // Claude Code provider (subprocess-based)
     pub const CLAUDE_CODE_CLI_PATH: &str = "CLAUDE_CODE_CLI_PATH";
     pub const CLAUDE_CODE_MODEL: &str = "CLAUDE_CODE_MODEL";
+    pub const CLAUDE_CODE_EFFORT: &str = "CLAUDE_CODE_EFFORT";
 
     // OpenAI Codex provider (subprocess-based)
     pub const CODEX_CLI_PATH: &str = "CODEX_CLI_PATH";
     pub const CODEX_MODEL: &str = "CODEX_MODEL";
+    pub const CODEX_EFFORT: &str = "CODEX_EFFORT";
 }
 
 // ============================================================================
@@ -490,6 +499,7 @@ pub const COMMON_PROVIDER_FIELDS: &[CommonFieldMeta] = &[
     CommonFieldMeta::new("api_base", "API base URL")
         .required(),
     CommonFieldMeta::new("model", "Model to use"),
+    CommonFieldMeta::new("effort", "Model effort/reasoning level (e.g. low, medium, high; accepted values vary by provider)"),
     CommonFieldMeta::new("max_tokens", "Max tokens for AI completion"),
 ];
 
@@ -501,6 +511,8 @@ pub const GLOBAL_SETTINGS_METADATA: &[FieldMeta] = &[
         .required(),
     FieldMeta::new("model", "Override model (takes precedence over provider-specific)")
         .env(env::SHAI_MODEL),
+    FieldMeta::new("effort", "Override model effort/reasoning level (takes precedence over provider-specific)")
+        .env(env::SHAI_EFFORT),
     FieldMeta::new("temperature", "Sampling temperature (0.0 = deterministic, 1.0 = creative)")
         .env(env::SHAI_TEMPERATURE)
         .default("0.05"),
@@ -559,6 +571,7 @@ pub const PROVIDER_METADATA: &[ProviderMeta] = &[
             FieldOverride { name: "api_key", env_var: Some(env::OPENAI_API_KEY), default: None, required: None },
             FieldOverride { name: "api_base", env_var: Some(env::OPENAI_API_BASE), default: Some("https://api.openai.com"), required: None },
             FieldOverride { name: "model", env_var: Some(env::OPENAI_MODEL), default: Some("gpt-5"), required: None },
+            FieldOverride { name: "effort", env_var: Some(env::OPENAI_EFFORT), default: None, required: None },
             FieldOverride { name: "max_tokens", env_var: Some(env::OPENAI_MAX_TOKENS), default: None, required: None },
         ],
         extra_fields: &[
@@ -576,6 +589,7 @@ pub const PROVIDER_METADATA: &[ProviderMeta] = &[
             FieldOverride { name: "api_key", env_var: Some(env::GROQ_API_KEY), default: None, required: None },
             FieldOverride { name: "api_base", env_var: None, default: Some("https://api.groq.com/openai"), required: None },
             FieldOverride { name: "model", env_var: Some(env::GROQ_MODEL), default: Some("openai/gpt-oss-120b"), required: None },
+            FieldOverride { name: "effort", env_var: Some(env::GROQ_EFFORT), default: None, required: None },
             FieldOverride { name: "max_tokens", env_var: Some(env::GROQ_MAX_TOKENS), default: None, required: None },
         ],
         extra_fields: &[],
@@ -589,6 +603,7 @@ pub const PROVIDER_METADATA: &[ProviderMeta] = &[
             FieldOverride { name: "api_key", env_var: Some(env::AZURE_API_KEY), default: None, required: None },
             FieldOverride { name: "api_base", env_var: Some(env::AZURE_API_BASE), default: None, required: Some(true) },
             FieldOverride { name: "model", env_var: None, default: None, required: None },
+            FieldOverride { name: "effort", env_var: Some(env::AZURE_EFFORT), default: None, required: None },
             FieldOverride { name: "max_tokens", env_var: Some(env::AZURE_MAX_TOKENS), default: None, required: None },
         ],
         extra_fields: &[
@@ -611,6 +626,7 @@ pub const PROVIDER_METADATA: &[ProviderMeta] = &[
             FieldOverride { name: "api_key", env_var: None, default: None, required: None },
             FieldOverride { name: "api_base", env_var: Some(env::OLLAMA_API_BASE), default: Some("http://localhost:11434"), required: None },
             FieldOverride { name: "model", env_var: Some(env::OLLAMA_MODEL), default: Some("gpt-oss:120b-cloud"), required: None },
+            FieldOverride { name: "effort", env_var: Some(env::OLLAMA_EFFORT), default: None, required: None },
             FieldOverride { name: "max_tokens", env_var: Some(env::OLLAMA_MAX_TOKENS), default: None, required: None },
         ],
         extra_fields: &[],
@@ -624,6 +640,7 @@ pub const PROVIDER_METADATA: &[ProviderMeta] = &[
             FieldOverride { name: "api_key", env_var: Some(env::MISTRAL_API_KEY), default: None, required: None },
             FieldOverride { name: "api_base", env_var: Some(env::MISTRAL_API_BASE), default: Some("https://api.mistral.ai"), required: None },
             FieldOverride { name: "model", env_var: Some(env::MISTRAL_MODEL), default: Some("codestral-2508"), required: None },
+            FieldOverride { name: "effort", env_var: Some(env::MISTRAL_EFFORT), default: None, required: None },
             FieldOverride { name: "max_tokens", env_var: Some(env::MISTRAL_MAX_TOKENS), default: None, required: None },
         ],
         extra_fields: &[],
@@ -637,6 +654,7 @@ pub const PROVIDER_METADATA: &[ProviderMeta] = &[
             FieldOverride { name: "api_key", env_var: Some(env::ANTHROPIC_API_KEY), default: None, required: None },
             FieldOverride { name: "api_base", env_var: Some(env::ANTHROPIC_API_BASE), default: Some("https://api.anthropic.com"), required: None },
             FieldOverride { name: "model", env_var: Some(env::ANTHROPIC_MODEL), default: Some("claude-sonnet-4-5"), required: None },
+            FieldOverride { name: "effort", env_var: Some(env::ANTHROPIC_EFFORT), default: None, required: None },
             FieldOverride { name: "max_tokens", env_var: Some(env::ANTHROPIC_MAX_TOKENS), default: None, required: None },
         ],
         extra_fields: &[],
@@ -650,6 +668,7 @@ pub const PROVIDER_METADATA: &[ProviderMeta] = &[
             FieldOverride { name: "api_key", env_var: None, default: None, required: Some(false) },
             FieldOverride { name: "api_base", env_var: None, default: None, required: Some(false) },
             FieldOverride { name: "model", env_var: Some(env::CLAUDE_CODE_MODEL), default: None, required: None },
+            FieldOverride { name: "effort", env_var: Some(env::CLAUDE_CODE_EFFORT), default: None, required: None },
         ],
         extra_fields: &[
             FieldMeta::new("cli_path", "Path to claude CLI executable")
@@ -667,6 +686,7 @@ pub const PROVIDER_METADATA: &[ProviderMeta] = &[
             FieldOverride { name: "api_key", env_var: None, default: None, required: Some(false) },
             FieldOverride { name: "api_base", env_var: None, default: None, required: Some(false) },
             FieldOverride { name: "model", env_var: Some(env::CODEX_MODEL), default: None, required: None },
+            FieldOverride { name: "effort", env_var: Some(env::CODEX_EFFORT), default: None, required: None },
         ],
         extra_fields: &[
             FieldMeta::new("cli_path", "Path to codex CLI executable (POSIX-shell parsed, e.g. \"npx @openai/codex@latest\")")
@@ -959,6 +979,8 @@ pub struct CliOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
@@ -988,6 +1010,7 @@ pub struct ProviderCredentials {
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub model: Option<String>,
+    pub effort: Option<String>,
     #[serde(default, deserialize_with = "deserialize_flexible")]
     pub max_tokens: Option<u32>,
     // OpenAI-specific
@@ -1006,6 +1029,7 @@ impl ProviderCredentials {
             "api_key" => self.api_key.clone(),
             "api_base" => self.api_base.clone(),
             "model" => self.model.clone(),
+            "effort" => self.effort.clone(),
             "organization" => self.organization.clone(),
             "max_tokens" => self.max_tokens.map(|t| t.to_string()),
             "deployment_name" => self.deployment_name.clone(),
@@ -1029,6 +1053,7 @@ pub struct ValidationError {
 pub struct TomlConfig {
     pub provider: Option<Provider>,
     pub model: Option<String>,
+    pub effort: Option<String>,
     #[serde(default, deserialize_with = "deserialize_flexible")]
     pub temperature: Option<f32>,
     #[serde(default, deserialize_with = "deserialize_flexible")]
@@ -1061,6 +1086,7 @@ pub struct AppConfig {
     // Provider settings
     pub provider: ConfigValue<Option<Provider>>,
     pub model: ConfigValue<String>,
+    pub effort: ConfigValue<Option<String>>,
     pub temperature: ConfigValue<f32>,
 
     // UI settings
@@ -1121,12 +1147,17 @@ impl<'a> ValidatedConfig<'a> {
         self.config.effective_max_tokens()
     }
 
+    pub fn effective_effort(&self) -> Option<String> {
+        self.config.effective_effort()
+    }
+
     /// Create the appropriate backend for this validated configuration..
     pub fn create_backend(&self) -> Box<dyn crate::backend::Backend> {
         use crate::backend::{AnthropicBackend, ClaudeCodeBackend, CodexBackend, OpenAiBackend};
 
         let temperature = self.temperature();
         let max_tokens = self.effective_max_tokens();
+        let effort = self.effective_effort();
 
         match self.provider {
             Provider::OpenAI => {
@@ -1144,6 +1175,7 @@ impl<'a> ValidatedConfig<'a> {
                     extra_headers,
                     temperature,
                     max_tokens,
+                    effort,
                 ))
             }
             Provider::Azure => {
@@ -1169,6 +1201,7 @@ impl<'a> ValidatedConfig<'a> {
                     vec![("api-key".to_string(), header_val)],
                     temperature,
                     max_tokens,
+                    effort,
                 ))
             }
             Provider::Ollama => {
@@ -1182,6 +1215,7 @@ impl<'a> ValidatedConfig<'a> {
                     vec![],
                     temperature,
                     max_tokens,
+                    effort,
                 ))
             }
             Provider::Mistral => {
@@ -1195,6 +1229,7 @@ impl<'a> ValidatedConfig<'a> {
                     vec![],
                     temperature,
                     max_tokens,
+                    effort,
                 ))
             }
             Provider::Groq => {
@@ -1208,6 +1243,7 @@ impl<'a> ValidatedConfig<'a> {
                     vec![],
                     temperature,
                     max_tokens,
+                    effort,
                 ))
             }
             Provider::Anthropic => {
@@ -1218,6 +1254,7 @@ impl<'a> ValidatedConfig<'a> {
                     self.credentials.api_key.clone(),
                     self.effective_model(),
                     max_tokens,
+                    effort,
                 ))
             }
             Provider::ClaudeCode => {
@@ -1227,7 +1264,7 @@ impl<'a> ValidatedConfig<'a> {
                     let m = self.effective_model();
                     if m.is_empty() { None } else { Some(m) }
                 };
-                Box::new(ClaudeCodeBackend::new(cli_path, model))
+                Box::new(ClaudeCodeBackend::new(cli_path, model, effort))
             }
             Provider::Codex => {
                 let cli_path = self.credentials.cli_path.clone()
@@ -1236,7 +1273,7 @@ impl<'a> ValidatedConfig<'a> {
                     let m = self.effective_model();
                     if m.is_empty() { None } else { Some(m) }
                 };
-                Box::new(CodexBackend::new(cli_path, model))
+                Box::new(CodexBackend::new(cli_path, model, effort))
             }
         }
     }
@@ -1362,6 +1399,10 @@ impl AppConfig {
                 parsed.model.unwrap_or_default(),
                 sources.get("model").copied().unwrap_or(ConfigSource::Default),
             ),
+            effort: ConfigValue::new(
+                parsed.effort,
+                sources.get("effort").copied().unwrap_or(ConfigSource::Default),
+            ),
             temperature: ConfigValue::new(
                 parsed.temperature.unwrap_or(0.05),
                 sources.get("temperature").copied().unwrap_or(ConfigSource::Default),
@@ -1447,6 +1488,26 @@ impl AppConfig {
         }
 
         String::new()
+    }
+
+    /// Get the effective effort for the current provider.
+    /// Precedence: global effort -> provider-specific effort -> unset.
+    pub fn effective_effort(&self) -> Option<String> {
+        if let Some(ref effort) = self.effort.value {
+            if !effort.is_empty() {
+                return Some(effort.clone());
+            }
+        }
+
+        if let Some(creds) = self.current_provider_credentials() {
+            if let Some(ref effort) = creds.effort {
+                if !effort.is_empty() {
+                    return Some(effort.clone());
+                }
+            }
+        }
+
+        None
     }
 
     /// Get the effective max_tokens for the current provider.
@@ -1616,6 +1677,20 @@ impl AppConfig {
                 } else {
                     effective_model
                 };
+                Some((display, source))
+            }
+            "effort" => {
+                let effective = self.effective_effort();
+                // Track source: global effort → provider-specific effort → default
+                let source = if self.effort.value.as_deref().is_some_and(|v| !v.is_empty()) {
+                    self.effort.source
+                } else if let Some(provider) = self.provider.value.as_ref() {
+                    let path = format!("{}.effort", provider.metadata().name);
+                    self.get_source(&path)
+                } else {
+                    ConfigSource::Default
+                };
+                let display = effective.unwrap_or_else(|| "(not set)".to_string());
                 Some((display, source))
             }
             "temperature" => Some((format!("{:.2}", self.temperature.value), self.temperature.source)),

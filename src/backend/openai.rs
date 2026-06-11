@@ -30,6 +30,8 @@ pub struct OpenAiBackend {
     temperature: f32,
     /// Maximum tokens in the response
     max_tokens: Option<u32>,
+    /// Reasoning effort level (e.g., "low", "medium", "high"); sent verbatim
+    effort: Option<String>,
 }
 
 impl OpenAiBackend {
@@ -41,6 +43,7 @@ impl OpenAiBackend {
         extra_headers: Vec<(String, String)>,
         temperature: f32,
         max_tokens: Option<u32>,
+        effort: Option<String>,
     ) -> Self {
         Self {
             url,
@@ -49,6 +52,7 @@ impl OpenAiBackend {
             extra_headers,
             temperature,
             max_tokens,
+            effort,
         }
     }
 
@@ -93,6 +97,10 @@ impl OpenAiBackend {
 
         if let Some(max_tokens) = self.max_tokens {
             payload["max_tokens"] = json!(max_tokens);
+        }
+
+        if let Some(ref effort) = self.effort {
+            payload["reasoning_effort"] = json!(effort);
         }
 
         payload
@@ -190,6 +198,7 @@ mod tests {
             vec![],
             0.5,
             Some(1000),
+            None,
         );
 
         let request = CompletionRequest {
@@ -231,6 +240,7 @@ mod tests {
             vec![],
             0.5,
             Some(1000),
+            None,
         );
 
         let request = CompletionRequest {
@@ -253,6 +263,34 @@ mod tests {
     }
 
     #[test]
+    fn test_build_payload_effort() {
+        let mut backend = OpenAiBackend::new(
+            "https://api.openai.com/v1/chat/completions".to_string(),
+            "gpt-4".to_string(),
+            Some("sk-test".to_string()),
+            vec![],
+            0.5,
+            Some(1000),
+            Some("low".to_string()),
+        );
+
+        let request = CompletionRequest {
+            system_messages: vec![],
+            message_history: vec![],
+            user_message: "Hello".to_string(),
+            json_schema: None,
+            schema_name: "test".to_string(),
+        };
+
+        let payload = backend.build_payload(&request, false);
+        assert_eq!(payload["reasoning_effort"], "low");
+
+        backend.effort = None;
+        let payload = backend.build_payload(&request, false);
+        assert!(payload.get("reasoning_effort").is_none());
+    }
+
+    #[test]
     fn test_build_payload_no_system_messages() {
         let backend = OpenAiBackend::new(
             "https://api.openai.com/v1/chat/completions".to_string(),
@@ -261,6 +299,7 @@ mod tests {
             vec![],
             0.5,
             Some(1000),
+            None,
         );
 
         let request = CompletionRequest {

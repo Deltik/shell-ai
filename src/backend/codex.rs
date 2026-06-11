@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct CodexBackend {
     cli_path: String,
     model: Option<String>,
+    effort: Option<String>,
 }
 
 /// RAII guard that deletes a temporary schema file when dropped.
@@ -25,8 +26,8 @@ impl Drop for TempSchemaFile {
 }
 
 impl CodexBackend {
-    pub fn new(cli_path: String, model: Option<String>) -> Self {
-        Self { cli_path, model }
+    pub fn new(cli_path: String, model: Option<String>, effort: Option<String>) -> Self {
+        Self { cli_path, model, effort }
     }
 
     fn build_prompt(request: &CompletionRequest) -> String {
@@ -109,6 +110,10 @@ impl CodexBackend {
 
         if let Some(ref model) = self.model {
             cmd.arg("-m").arg(model);
+        }
+        if let Some(ref effort) = self.effort {
+            // Codex parses the value as TOML, falling back to a literal string
+            cmd.arg("-c").arg(format!("model_reasoning_effort={effort}"));
         }
         if let Some(file) = schema_file {
             cmd.arg("--output-schema").arg(&file.path);
